@@ -44,7 +44,7 @@ app.Run();
 
 
 
-
+using Scalar.AspNetCore;
 var builder = WebApplication.CreateBuilder(args);
 
 // Authentication/Authorization
@@ -60,6 +60,11 @@ builder.Services.AddAuthentication("Bearer")
         };
     });
 builder.Services.AddAuthorization();
+builder.Services.AddProblemDetails();
+
+// ===== EXERCISE 5: Add Controllers Service =====
+builder.Services.AddControllers();
+builder.Services.AddOpenApi();
 
 // ===== EXERCISE 2: Service Registrations =====
 builder.Services.AddSingleton<EnrollmentWorker>();
@@ -81,10 +86,23 @@ builder.Host.UseDefaultServiceProvider(options =>
 var app = builder.Build();
 
 // Middleware
-app.UseMiddleware<RequestLoggingMiddleware>();
+app.UseMiddleware<RequestLoggingMiddleware>();    // from Session 1
+app.UseExceptionHandler();                        // catches exceptions
+app.UseStatusCodePages();                         // optional but recommended to turn bare status codes into ProblemDetails,  // adds ProblemDetails for status codes like 404
 app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
+
+// Environment-aware configuration
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();
+    app.MapScalarApiReference();   // Scalar UI at /scalar/v1
+}
+// In production, we do NOT map OpenAPI/Scalar, so they return 404.
+
+// ===== EXERCISE 5: Map Controllers =====
+app.MapControllers();                             // and other minimal endpoints
 
 // Session 1 Endpoint
 app.MapGet("/api/assessments/results", () => Results.Ok(new
@@ -121,5 +139,11 @@ app.MapDelete("/test/enrollment/{id}", async (IEnrollmentService service, string
     var result = await service.DeleteAsync(id);
     return result ? Results.Ok("Deleted") : Results.NotFound();
 });*/
+
+app.MapGet("/api/error", () =>
+{
+    throw new TmsDatabaseException("Simulated database failure for ProblemDetails testing");
+});
+
 
 app.Run();
