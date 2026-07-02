@@ -110,5 +110,34 @@ public async Task<IActionResult> StudentsNoEnrollments()
     return Ok(new { UsingAny = usingAny, UsingLeftJoin = usingLeftJoin });
 }
 
+[HttpGet("students-paged")]
+public async Task<IActionResult> GetStudentsPaged(int page = 1, int pageSize = 20)
+{
+    // Stable sort by Name to ensure consistent paging
+    var query = _context.Students
+        .OrderBy(s => s.Name)
+        .Skip((page - 1) * pageSize)
+        .Take(pageSize);
+
+    var students = await query.ToListAsync();
+    return Ok(students);
+}
+
+[HttpGet("top-courses")]
+public async Task<IActionResult> GetTopCoursesByEnrollment()
+{
+    var topCourses = await _context.Courses
+        .Select(c => new
+        {
+            c.Title,
+            EnrollmentCount = c.Enrollments.Count
+        })
+        .OrderByDescending(x => x.EnrollmentCount)
+        .Take(5)
+        .ToListAsync();
+
+    return Ok(topCourses);
+}
+
 
 }

@@ -10,4 +10,11 @@ public class TmsDbContext(DbContextOptions<TmsDbContext> options) : DbContext(op
     public DbSet<Enrollment> Enrollments => Set<Enrollment>();
     public DbSet<Assessment> Assessments => Set<Assessment>();
     public DbSet<Certificate> Certificates => Set<Certificate>();
+
+
+     protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        // Automatically discover and apply all IEntityTypeConfiguration<T> classes
+        modelBuilder.ApplyConfigurationsFromAssembly(typeof(TmsDbContext).Assembly);
+    }
 }

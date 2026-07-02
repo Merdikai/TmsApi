@@ -1,3 +1,4 @@
+//using System.Collections.Generic;
 namespace TmsApi.Entities;
 
 public class Student
@@ -10,4 +11,6 @@ public class Student
 
     // Navigation to enrollments
     public ICollection<Enrollment> Enrollments { get; set; } = new List<Enrollment>();
+
+    public ICollection<Certificate> Certificates { get; set; } = new List<Certificate>();
 }

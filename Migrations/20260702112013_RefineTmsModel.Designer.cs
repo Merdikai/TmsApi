@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using TmsApi.Data;
@@ -11,9 +12,11 @@ using TmsApi.Data;
 namespace TmsApi.Migrations
 {
     [DbContext(typeof(TmsDbContext))]
-    partial class TmsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260702112013_RefineTmsModel")]
+    partial class RefineTmsModel
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -171,7 +174,7 @@ namespace TmsApi.Migrations
             modelBuilder.Entity("TmsApi.Entities.Assessment", b =>
                 {
                     b.HasOne("TmsApi.Entities.Course", "Course")
-                        .WithMany("Assessments")
+                        .WithMany()
                         .HasForeignKey("CourseId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
@@ -182,13 +185,13 @@ namespace TmsApi.Migrations
             modelBuilder.Entity("TmsApi.Entities.Certificate", b =>
                 {
                     b.HasOne("TmsApi.Entities.Course", "Course")
-                        .WithMany("Certificates")
+                        .WithMany()
                         .HasForeignKey("CourseId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.HasOne("TmsApi.Entities.Student", "Student")
-                        .WithMany("Certificates")
+                        .WithMany()
                         .HasForeignKey("StudentId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
@@ -219,17 +222,11 @@ namespace TmsApi.Migrations
 
             modelBuilder.Entity("TmsApi.Entities.Course", b =>
                 {
-                    b.Navigation("Assessments");
-
-                    b.Navigation("Certificates");
-
                     b.Navigation("Enrollments");
                 });
 
             modelBuilder.Entity("TmsApi.Entities.Student", b =>
                 {
-                    b.Navigation("Certificates");
-
                     b.Navigation("Enrollments");
                 });
 #pragma warning restore 612, 618
