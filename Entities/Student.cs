@@ -13,4 +13,7 @@ public class Student
     public ICollection<Enrollment> Enrollments { get; set; } = new List<Enrollment>();
 
     public ICollection<Certificate> Certificates { get; set; } = new List<Certificate>();
+
+    public byte[]? Version { get; set; }  // will be mapped to xmin
+    public bool IsDeleted { get; set; } = false;
 }

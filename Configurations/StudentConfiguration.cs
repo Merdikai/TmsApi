@@ -28,5 +28,13 @@ public class StudentConfiguration : IEntityTypeConfiguration<Student>
             .WithOne(e => e.Student)
             .HasForeignKey(e => e.StudentId)
             .OnDelete(DeleteBehavior.Restrict); // We'll discuss in Exercise 5
+
+        builder.Property<DateTime>("LastUpdated")
+            .HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+        builder.Property(s => s.Version)
+            .IsRowVersion();    
+            
+        builder.HasQueryFilter(s => !s.IsDeleted);
     }
 }
