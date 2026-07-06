@@ -15,6 +15,15 @@ public class CoursesController : ControllerBase
         _courseService = courseService;
     }
 
+    // GET /api/courses - paginated collection
+    [HttpGet]
+    public async Task<IActionResult> GetCourses([FromQuery] PageRequest request, CancellationToken ct)
+    {
+        var result = await _courseService.GetCoursesAsync(request, ct);
+        return Ok(result);
+    }
+
+    // GET /api/courses/{id} - single item
     [HttpGet("{id:int}", Name = nameof(GetCourseById))]
     public async Task<IActionResult> GetCourseById(int id, CancellationToken ct)
     {
@@ -22,6 +31,7 @@ public class CoursesController : ControllerBase
         return course is not null ? Ok(course) : NotFound();
     }
 
+    // POST /api/courses - create new course
     [HttpPost]
     public async Task<IActionResult> CreateCourse([FromBody] CreateCourseRequest request, CancellationToken ct)
     {

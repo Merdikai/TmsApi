@@ -50,6 +50,8 @@ using Scalar.AspNetCore;
 using TmsApi.Services;
 using TmsApi.Dtos;
 using TmsApi.Exceptions;
+using TmsApi.Filters;
+//using TmsApi.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -76,8 +78,12 @@ builder.Services.AddDbContext<TmsDbContext>(options =>
 // ===== Problem Details =====
 builder.Services.AddProblemDetails();
 
-// ===== EXERCISE 5: Add Controllers Service =====
-builder.Services.AddControllers();
+/* ===== EXERCISE 5: Add Controllers Service =====
+builder.Services.AddControllers();*/
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<AuditLogFilter>();
+});
 
 // ===== OpenAPI =====
 builder.Services.AddOpenApi();
@@ -206,9 +212,17 @@ using (var scope = app.Services.CreateScope())
         };
         context.Enrollments.AddRange(enrollments);
         context.SaveChanges();
+         
     }
 }
 
+// Seed test data at startup (only in Development)
+if (app.Environment.IsDevelopment())
+{
+    using var scope = app.Services.CreateScope();
+    var context = scope.ServiceProvider.GetRequiredService<TmsDbContext>();
+    DataSeeder.SeedAsync(context).GetAwaiter().GetResult();
+}
 
 
 app.Run();
