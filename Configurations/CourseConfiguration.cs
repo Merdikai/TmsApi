@@ -18,8 +18,8 @@ public class CourseConfiguration : IEntityTypeConfiguration<Course>
             .IsRequired()
             .HasMaxLength(200);
 
-        builder.Property(c => c.Capacity)
-            .IsRequired();
+        // Unique constraint for duplicate code check
+        builder.HasIndex(c => c.Code).IsUnique();
 
         // Course has many Enrollments
         builder.HasMany(c => c.Enrollments)

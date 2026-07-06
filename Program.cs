@@ -47,6 +47,10 @@ using Microsoft.EntityFrameworkCore;
 using TmsApi.Data;
 using TmsApi.Entities;
 using Scalar.AspNetCore;
+using TmsApi.Services;
+using TmsApi.Dtos;
+using TmsApi.Exceptions;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Authentication/Authorization
@@ -62,19 +66,26 @@ builder.Services.AddAuthentication("Bearer")
         };
     });
 builder.Services.AddAuthorization();
+
+// ===== Database Context =====
 builder.Services.AddDbContext<TmsDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("TmsDatabase"))
         .LogTo(Console.WriteLine, LogLevel.Information)   // prints SQL
         .EnableSensitiveDataLogging());                   // shows parameter values
+
+// ===== Problem Details =====
 builder.Services.AddProblemDetails();
 
 // ===== EXERCISE 5: Add Controllers Service =====
 builder.Services.AddControllers();
+
+// ===== OpenAPI =====
 builder.Services.AddOpenApi();
 
 // ===== EXERCISE 2: Service Registrations =====
 builder.Services.AddSingleton<EnrollmentWorker>();
-builder.Services.AddScoped<IEnrollmentService, EnrollmentService>();
+builder.Services.AddScoped<IEnrollmentService, EnrollmentService>();  // NEW EnrollmentService
+builder.Services.AddScoped<ICourseService, CourseService>();
 
 // ===== EXERCISE 3: Options Pattern =====
 builder.Services.AddOptions<PaymentOptions>()
@@ -91,10 +102,16 @@ builder.Host.UseDefaultServiceProvider(options =>
 
 var app = builder.Build();
 
-// Middleware
+// =============================================
+// EXERCISE 1B: Add custom logging middleware FIRST
+// =============================================
 app.UseMiddleware<RequestLoggingMiddleware>();    // from Session 1
+
+// (Optional) UseExceptionHandler - add it here if you want, 
+// but it's fine to leave it out for now as we are just logging.
 app.UseExceptionHandler();                        // catches exceptions
-app.UseStatusCodePages();                         // optional but recommended to turn bare status codes into ProblemDetails,  // adds ProblemDetails for status codes like 404
+app.UseStatusCodePages();                         // adds ProblemDetails for status codes like 404
+
 app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
@@ -108,7 +125,7 @@ if (app.Environment.IsDevelopment())
 // In production, we do NOT map OpenAPI/Scalar, so they return 404.
 
 // ===== EXERCISE 5: Map Controllers =====
-app.MapControllers();                             // and other minimal endpoints
+app.MapControllers();
 
 // Session 1 Endpoint
 app.MapGet("/api/assessments/results", () => Results.Ok(new
@@ -146,12 +163,11 @@ app.MapDelete("/test/enrollment/{id}", async (IEnrollmentService service, string
     return result ? Results.Ok("Deleted") : Results.NotFound();
 });*/
 
+// ===== Test Error Endpoint =====
 app.MapGet("/api/error", () =>
 {
     throw new TmsDatabaseException("Simulated database failure for ProblemDetails testing");
 });
-
-
 
 // Seed test data at startup
 using (var scope = app.Services.CreateScope())
@@ -173,9 +189,9 @@ using (var scope = app.Services.CreateScope())
 
         var courses = new List<Course>
         {
-            new() { Code = "CS-101", Title = "Introduction to Computer Science", Capacity = 30 },
-            new() { Code = "CS-201", Title = "Data Structures and Algorithms", Capacity = 25 },
-            new() { Code = "MAT-101", Title = "Calculus I", Capacity = 40 }
+            new() { Code = "CS-101", Title = "Introduction to Computer Science", MaxCapacity = 30 },
+            new() { Code = "CS-201", Title = "Data Structures and Algorithms", MaxCapacity = 25 },
+            new() { Code = "MAT-101", Title = "Calculus I", MaxCapacity = 40 }
         };
         context.Courses.AddRange(courses);
 
@@ -192,6 +208,7 @@ using (var scope = app.Services.CreateScope())
         context.SaveChanges();
     }
 }
+
 
 
 app.Run();
