@@ -16,17 +16,18 @@ public class CourseService : ICourseService
         _logger = logger;
     }
 
-    public async Task<CourseResponseDto?> GetByIdAsync(int id, CancellationToken ct)
+    public async Task<CourseDetailDto?> GetByIdAsync(int id, CancellationToken ct)
     {
         return await _context.Courses
             .AsNoTracking()
             .Where(c => c.Id == id)
-            .Select(c => new CourseResponseDto(
+            .Select(c => new CourseDetailDto(
                 c.Id,
                 c.Code,
                 c.Title,
                 c.MaxCapacity,
-                c.Enrollments.Count
+                c.Enrollments.Count,
+                new List<LinkDto>() // empty – links are added by the controller
             ))
             .FirstOrDefaultAsync(ct);
     }
@@ -45,8 +46,20 @@ public class CourseService : ICourseService
 
         _logger.LogInformation("Created course {CourseId} ({Code})", course.Id, course.Code);
 
-        return await GetByIdAsync(course.Id, ct) 
-            ?? throw new InvalidOperationException("Failed to retrieve created course");
+        // Re-query to get the DTO with enrollment count
+        var dto = await _context.Courses
+            .AsNoTracking()
+            .Where(c => c.Id == course.Id)
+            .Select(c => new CourseResponseDto(
+                c.Id,
+                c.Code,
+                c.Title,
+                c.MaxCapacity,
+                c.Enrollments.Count
+            ))
+            .FirstOrDefaultAsync(ct);
+
+        return dto ?? throw new InvalidOperationException("Failed to retrieve created course.");
     }
 
     public async Task<bool> CodeExistsAsync(string code, CancellationToken ct)
@@ -56,10 +69,9 @@ public class CourseService : ICourseService
 
     public async Task<PagedResponse<CourseResponseDto>> GetCoursesAsync(PageRequest request, CancellationToken ct)
     {
-        // TODO 1: Start with a no-tracking IQueryable<Course>
         IQueryable<Course> query = _context.Courses.AsNoTracking();
 
-        // TODO 2: If request.Search has a value, append a Where clause
+        // Apply search filter
         if (!string.IsNullOrWhiteSpace(request.Search))
         {
             var searchTerm = $"%{request.Search}%";
@@ -68,25 +80,24 @@ public class CourseService : ICourseService
                 EF.Functions.ILike(c.Code, searchTerm));
         }
 
-        // TODO 3: Count BEFORE paging
+        // Count total before paging
         var totalCount = await query.CountAsync(ct);
 
-        // TODO 4: Apply OrderBy, then Skip/Take, then Select projection
-        // OrderBy logic
+        // Apply sorting
         IQueryable<Course> sortedQuery = request.OrderBy?.ToLower() switch
         {
-            "code" => request.Descending 
-                ? query.OrderByDescending(c => c.Code) 
+            "code" => request.Descending
+                ? query.OrderByDescending(c => c.Code)
                 : query.OrderBy(c => c.Code),
-            "maxcapacity" => request.Descending 
-                ? query.OrderByDescending(c => c.MaxCapacity) 
+            "maxcapacity" => request.Descending
+                ? query.OrderByDescending(c => c.MaxCapacity)
                 : query.OrderBy(c => c.MaxCapacity),
-            _ => request.Descending 
-                ? query.OrderByDescending(c => c.Title) 
+            _ => request.Descending
+                ? query.OrderByDescending(c => c.Title)
                 : query.OrderBy(c => c.Title)
         };
 
-        // TODO 5: Skip and Take
+        // Apply skip/take and project
         var items = await sortedQuery
             .Skip((request.Page - 1) * request.PageSize)
             .Take(request.PageSize)
@@ -99,7 +110,6 @@ public class CourseService : ICourseService
             ))
             .ToListAsync(ct);
 
-        // TODO 6: Return the paged response
         return new PagedResponse<CourseResponseDto>
         {
             Items = items,
