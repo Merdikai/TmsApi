@@ -59,8 +59,9 @@ using TmsApi.Application.Interfaces;            // for ICourseService, IEnrollme
 using TmsApi.Application.DTOs;     
 using TmsApi.Api.Options;             // if you use DTOs in minimal APIs
 // using TmsApi.Api.Filters;                       // for AuditLogFilter (now in Api project)
-
 //using TmsApi.Data;
+using Asp.Versioning;
+using TmsApi.Api.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -93,6 +94,21 @@ builder.Services.AddControllers(options =>
 {
     options.Filters.Add<AuditLogFilter>();
 });
+
+
+builder.Services.AddApiVersioning(options =>
+{
+    options.DefaultApiVersion = new ApiVersion(1, 0);
+    options.AssumeDefaultVersionWhenUnspecified = true;
+    options.ReportApiVersions = true;
+    options.ApiVersionReader = new UrlSegmentApiVersionReader();
+})
+.AddApiExplorer(options =>
+{
+    options.GroupNameFormat = "'v'VVV";
+    options.SubstituteApiVersionInUrl = true;
+});
+
 
 // ===== OpenAPI =====
 builder.Services.AddOpenApi();
@@ -139,6 +155,8 @@ if (app.Environment.IsDevelopment())
 }
 // In production, we do NOT map OpenAPI/Scalar, so they return 404.
 
+app.UseMiddleware<V1DeprecationMiddleware>();
+
 // ===== EXERCISE 5: Map Controllers =====
 app.MapControllers();
 
@@ -183,6 +201,8 @@ app.MapGet("/api/error", () =>
 {
     throw new TmsDatabaseException("Simulated database failure for ProblemDetails testing");
 });
+
+
 
 // Seed test data at startup
 using (var scope = app.Services.CreateScope())
