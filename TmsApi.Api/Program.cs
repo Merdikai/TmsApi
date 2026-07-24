@@ -63,6 +63,12 @@ using TmsApi.Api.Options;             // if you use DTOs in minimal APIs
 using Asp.Versioning;
 using TmsApi.Api.Middleware;
 
+using TmsApi.Application.Enrollments.Commands;
+using TmsApi.Application.Behaviors;
+using FluentValidation;
+using MediatR;
+using TmsApi.Api.ExceptionHandlers;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Authentication/Authorization
@@ -94,6 +100,18 @@ builder.Services.AddControllers(options =>
 {
     options.Filters.Add<AuditLogFilter>();
 });
+
+builder.Services.AddMediatR(cfg =>
+    cfg.RegisterServicesFromAssembly(typeof(EnrollStudentHandler).Assembly));
+
+builder.Services.AddValidatorsFromAssembly(typeof(EnrollStudentValidator).Assembly);
+
+// LoggingBehavior FIRST - it must wrap ValidationBehavior
+builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(LoggingBehavior<,>));
+builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));
+
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+builder.Services.AddProblemDetails();
 
 
 builder.Services.AddApiVersioning(options =>
@@ -131,7 +149,11 @@ builder.Host.UseDefaultServiceProvider(options =>
     options.ValidateOnBuild = true;
 });
 
+builder.Services.AddScoped<ICourseRepository, CourseRepository>();
+builder.Services.AddScoped<IEnrollmentRepository, EnrollmentRepository>();
+
 var app = builder.Build();
+//app.UseExceptionHandler();
 
 // =============================================
 // EXERCISE 1B: Add custom logging middleware FIRST
