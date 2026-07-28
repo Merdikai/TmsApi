@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using TmsApi.Infrastructure.Persistence;
 using TmsApi.Application.DTOs;
 using TmsApi.Domain.Entities;
@@ -18,19 +18,17 @@ public class CourseService : ICourseService
         _logger = logger;
     }
 
-    public async Task<CourseDetailDto?> GetByIdAsync(int id, CancellationToken ct)
+    public Task<CourseResponseDto?> GetByIdAsync(int id, CancellationToken ct)
     {
-        return await _context.Courses
+        return _context.Courses
             .AsNoTracking()
             .Where(c => c.Id == id)
-            .Select(c => new CourseDetailDto(
+            .Select(c => new CourseResponseDto(
                 c.Id,
                 c.Code,
                 c.Title,
                 c.MaxCapacity,
-                c.Enrollments.Count,
-                new List<LinkDto>() // empty – links are added by the controller
-            ))
+                c.Enrollments.Count))
             .FirstOrDefaultAsync(ct);
     }
 
@@ -42,26 +40,10 @@ public class CourseService : ICourseService
             Title = request.Title,
             MaxCapacity = request.MaxCapacity
         };
-
         _context.Courses.Add(course);
         await _context.SaveChangesAsync(ct);
-
         _logger.LogInformation("Created course {CourseId} ({Code})", course.Id, course.Code);
-
-        // Re-query to get the DTO with enrollment count
-        var dto = await _context.Courses
-            .AsNoTracking()
-            .Where(c => c.Id == course.Id)
-            .Select(c => new CourseResponseDto(
-                c.Id,
-                c.Code,
-                c.Title,
-                c.MaxCapacity,
-                c.Enrollments.Count
-            ))
-            .FirstOrDefaultAsync(ct);
-
-        return dto ?? throw new InvalidOperationException("Failed to retrieve created course.");
+        return (await GetByIdAsync(course.Id, ct))!;
     }
 
     public async Task<bool> CodeExistsAsync(string code, CancellationToken ct)
@@ -72,52 +54,26 @@ public class CourseService : ICourseService
     public async Task<PagedResponse<CourseResponseDto>> GetCoursesAsync(PageRequest request, CancellationToken ct)
     {
         IQueryable<Course> query = _context.Courses.AsNoTracking();
-
-        // Apply search filter
         if (!string.IsNullOrWhiteSpace(request.Search))
         {
             var searchTerm = $"%{request.Search}%";
-            query = query.Where(c =>
-                EF.Functions.ILike(c.Title, searchTerm) ||
-                EF.Functions.ILike(c.Code, searchTerm));
+            query = query.Where(c => EF.Functions.ILike(c.Title, searchTerm) || EF.Functions.ILike(c.Code, searchTerm));
         }
-
-        // Count total before paging
         var totalCount = await query.CountAsync(ct);
-
-        // Apply sorting
         IQueryable<Course> sortedQuery = request.OrderBy?.ToLower() switch
         {
-            "code" => request.Descending
-                ? query.OrderByDescending(c => c.Code)
-                : query.OrderBy(c => c.Code),
-            "maxcapacity" => request.Descending
-                ? query.OrderByDescending(c => c.MaxCapacity)
-                : query.OrderBy(c => c.MaxCapacity),
-            _ => request.Descending
-                ? query.OrderByDescending(c => c.Title)
-                : query.OrderBy(c => c.Title)
+            "code" => request.Descending ? query.OrderByDescending(c => c.Code) : query.OrderBy(c => c.Code),
+            "maxcapacity" => request.Descending ? query.OrderByDescending(c => c.MaxCapacity) : query.OrderBy(c => c.MaxCapacity),
+            _ => request.Descending ? query.OrderByDescending(c => c.Title) : query.OrderBy(c => c.Title)
         };
-
-        // Apply skip/take and project
         var items = await sortedQuery
             .Skip((request.Page - 1) * request.PageSize)
             .Take(request.PageSize)
-            .Select(c => new CourseResponseDto(
-                c.Id,
-                c.Code,
-                c.Title,
-                c.MaxCapacity,
-                c.Enrollments.Count
-            ))
+            .Select(c => new CourseResponseDto(c.Id, c.Code, c.Title, c.MaxCapacity, c.Enrollments.Count))
             .ToListAsync(ct);
-
         return new PagedResponse<CourseResponseDto>
         {
-            Items = items,
-            TotalCount = totalCount,
-            Page = request.Page,
-            PageSize = request.PageSize
+            Items = items, TotalCount = totalCount, Page = request.Page, PageSize = request.PageSize
         };
     }
 }

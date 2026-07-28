@@ -68,6 +68,11 @@ using TmsApi.Application.Behaviors;
 using FluentValidation;
 using MediatR;
 using TmsApi.Api.ExceptionHandlers;
+using Microsoft.Extensions.Caching.Hybrid;
+using TmsApi.Infrastructure.Caching;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.RateLimiting;
+using TmsApi.Api.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -100,6 +105,108 @@ builder.Services.AddControllers(options =>
 {
     options.Filters.Add<AuditLogFilter>();
 });
+
+builder.Services.AddHybridCache(options =>
+{
+    options.DefaultEntryOptions = new HybridCacheEntryOptions
+    {
+        Expiration = TimeSpan.FromMinutes(10),
+        LocalCacheExpiration = TimeSpan.FromMinutes(2)
+    };
+});
+// Production-only - leave commented for lab
+// builder.Services.AddStackExchangeRedisCache(options =>
+// {
+//     options.Configuration = builder.Configuration.GetConnectionString("Redis");
+//     options.InstanceName = "tms:";
+// });
+// builder.Services.AddHybridCache();
+
+
+
+
+builder.Services.AddRateLimiter(options =>
+{
+    // Global limiter - applies to all requests
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(httpContext =>
+    {
+        var (partitionKey, tier) = ApiKeyResolver.Resolve(httpContext);
+
+        return tier switch
+        {
+            ApiKeyTier.Paid => RateLimitPartition.GetTokenBucketLimiter(
+                partitionKey: $"paid:{partitionKey}",
+                factory: _ => new TokenBucketRateLimiterOptions
+                {
+                    TokenLimit = 200,
+                    TokensPerPeriod = 100,
+                    ReplenishmentPeriod = TimeSpan.FromSeconds(10),
+                    QueueLimit = 0,
+                    AutoReplenishment = true
+                }),
+            ApiKeyTier.Free => RateLimitPartition.GetTokenBucketLimiter(
+                partitionKey: $"free:{partitionKey}",
+                factory: _ => new TokenBucketRateLimiterOptions
+                {
+                    TokenLimit = 50,
+                    TokensPerPeriod = 25,
+                    ReplenishmentPeriod = TimeSpan.FromSeconds(10),
+                    QueueLimit = 0,
+                    AutoReplenishment = true
+                }),
+            _ => RateLimitPartition.GetTokenBucketLimiter(
+                partitionKey: $"anon:{partitionKey}",
+                factory: _ => new TokenBucketRateLimiterOptions
+                {
+                    TokenLimit = 10,
+                    TokensPerPeriod = 5,
+                    ReplenishmentPeriod = TimeSpan.FromSeconds(10),
+                    QueueLimit = 0,
+                    AutoReplenishment = true
+                })
+        };
+    });
+
+    // Concurrency limiter for expensive transcript endpoint
+    options.AddConcurrencyLimiter("transcripts", opt =>
+    {
+        opt.PermitLimit = 5;      // 5 in-flight transcripts maximum
+        opt.QueueLimit = 20;      // Queue up to 20 more
+        opt.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+    });
+
+    // Token bucket for search endpoint
+    options.AddTokenBucketLimiter("search", opt =>
+    {
+        opt.TokenLimit = 10;
+        opt.TokensPerPeriod = 5;
+        opt.ReplenishmentPeriod = TimeSpan.FromSeconds(10);
+        opt.QueueLimit = 2;
+    });
+
+    // Customize rejection response
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        context.HttpContext.Response.ContentType = "application/problem+json";
+
+        var retryAfter = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var ts)
+            ? (int)ts.TotalSeconds
+            : 10;
+
+        var problem = new
+        {
+            type = "https://tms.local/errors/rate-limited",
+            title = "Too Many Requests",
+            status = 429,
+            detail = "Rate limit exceeded. Please try again later.",
+            retryAfter = retryAfter
+        };
+
+        await context.HttpContext.Response.WriteAsJsonAsync(problem, cancellationToken);
+    };
+});
+
 
 builder.Services.AddMediatR(cfg =>
     cfg.RegisterServicesFromAssembly(typeof(EnrollStudentHandler).Assembly));
@@ -136,6 +243,10 @@ builder.Services.AddSingleton<EnrollmentWorker>();
 builder.Services.AddScoped<IEnrollmentService, EnrollmentService>();  // NEW EnrollmentService
 builder.Services.AddScoped<ICourseService, CourseService>();
 
+// In the services section:
+builder.Services.AddHybridCache();
+builder.Services.AddScoped<ICachedCourseService, CachedCourseService>();
+
 // ===== EXERCISE 3: Options Pattern =====
 builder.Services.AddOptions<PaymentOptions>()
     .BindConfiguration("Payments")
@@ -151,6 +262,7 @@ builder.Host.UseDefaultServiceProvider(options =>
 
 builder.Services.AddScoped<ICourseRepository, CourseRepository>();
 builder.Services.AddScoped<IEnrollmentRepository, EnrollmentRepository>();
+builder.Services.AddScoped<ICachedCourseService, CachedCourseService>();
 
 var app = builder.Build();
 //app.UseExceptionHandler();
@@ -166,6 +278,7 @@ app.UseExceptionHandler();                        // catches exceptions
 app.UseStatusCodePages();                         // adds ProblemDetails for status codes like 404
 
 app.UseRouting();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
