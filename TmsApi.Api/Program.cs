@@ -73,6 +73,11 @@ using TmsApi.Infrastructure.Caching;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
 using TmsApi.Api.RateLimiting;
+using System.Threading.Channels;
+using TmsApi.Infrastructure.Transcripts;
+using TmsApi.Application.Transcripts;
+using TmsApi.Infrastructure.Workers;
+using TmsApi.Api.Hubs;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -244,7 +249,6 @@ builder.Services.AddScoped<IEnrollmentService, EnrollmentService>();  // NEW Enr
 builder.Services.AddScoped<ICourseService, CourseService>();
 
 // In the services section:
-builder.Services.AddHybridCache();
 builder.Services.AddScoped<ICachedCourseService, CachedCourseService>();
 
 // ===== EXERCISE 3: Options Pattern =====
@@ -262,9 +266,24 @@ builder.Host.UseDefaultServiceProvider(options =>
 
 builder.Services.AddScoped<ICourseRepository, CourseRepository>();
 builder.Services.AddScoped<IEnrollmentRepository, EnrollmentRepository>();
-builder.Services.AddScoped<ICachedCourseService, CachedCourseService>();
+
+builder.Services.AddSignalR();
+// After builder.Services.AddSignalR() (we'll add this in Exercise 6)
+builder.Services.AddSingleton<ITranscriptStatusStore, InMemoryTranscriptStatusStore>();
+
+// Create the bounded channel for transcript requests
+builder.Services.AddSingleton(Channel.CreateBounded<TranscriptRequest>(
+    new BoundedChannelOptions(100)
+    {
+        FullMode = BoundedChannelFullMode.Wait
+    }));
+
+
+builder.Services.AddHostedService<TranscriptWorker>();
+
 
 var app = builder.Build();
+
 //app.UseExceptionHandler();
 
 // =============================================
@@ -291,7 +310,7 @@ if (app.Environment.IsDevelopment())
 // In production, we do NOT map OpenAPI/Scalar, so they return 404.
 
 app.UseMiddleware<V1DeprecationMiddleware>();
-
+app.MapHub<TmsHub>("/hubs/tms");
 // ===== EXERCISE 5: Map Controllers =====
 app.MapControllers();
 
