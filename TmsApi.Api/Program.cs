@@ -76,8 +76,8 @@ using TmsApi.Api.RateLimiting;
 using System.Threading.Channels;
 using TmsApi.Infrastructure.Transcripts;
 using TmsApi.Application.Transcripts;
+using TmsApi.Application.Hubs;
 using TmsApi.Infrastructure.Workers;
-using TmsApi.Api.Hubs;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -103,6 +103,17 @@ builder.Services.AddDbContext<TmsDbContext>(options =>
 
 // ===== Problem Details =====
 builder.Services.AddProblemDetails();
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("DevCors", policy =>
+    {
+        policy.SetIsOriginAllowed(_ => true)
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials();
+    });
+});
 
 /* ===== EXERCISE 5: Add Controllers Service =====
 builder.Services.AddControllers();*/
@@ -296,8 +307,10 @@ app.UseMiddleware<RequestLoggingMiddleware>();    // from Session 1
 app.UseExceptionHandler();                        // catches exceptions
 app.UseStatusCodePages();                         // adds ProblemDetails for status codes like 404
 
+app.UseCors("DevCors");
 app.UseRouting();
 app.UseRateLimiter();
+app.MapHub<TmsHub>("/hubs/tms");
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -310,9 +323,14 @@ if (app.Environment.IsDevelopment())
 // In production, we do NOT map OpenAPI/Scalar, so they return 404.
 
 app.UseMiddleware<V1DeprecationMiddleware>();
-app.MapHub<TmsHub>("/hubs/tms");
 // ===== EXERCISE 5: Map Controllers =====
 app.MapControllers();
+
+app.MapGet("/", () => Results.Ok(new
+{
+    message = "TMS API is running",
+    hub = "/hubs/tms"
+}));
 
 // Session 1 Endpoint
 app.MapGet("/api/assessments/results", () => Results.Ok(new

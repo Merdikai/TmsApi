@@ -1,7 +1,6 @@
 using Microsoft.AspNetCore.SignalR;
-using TmsApi.Application.Hubs;
 
-namespace TmsApi.Api.Hubs;
+namespace TmsApi.Application.Hubs;
 
 public class TmsHub : Hub<ITmsHubClient>
 {
