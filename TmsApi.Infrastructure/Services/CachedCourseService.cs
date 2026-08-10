@@ -23,15 +23,39 @@ public class CachedCourseService : ICachedCourseService
 
     public async Task<List<CourseDto>> GetAllCoursesAsync(CancellationToken ct)
     {
-        return await _context.Courses
-            .AsNoTracking()
-            .Select(c => new CourseDto(
-                c.Id,
-                c.Code,
-                c.Title,
-                c.MaxCapacity,
-                c.Enrollments.Count))
-            .ToListAsync(ct);
+        var key = CacheKeys.CoursesAll;
+        var dbHit = false;
+
+        var courses = await _cache.GetOrCreateAsync(
+            key,
+            async token =>
+            {
+                dbHit = true;
+                _logger.LogInformation("Cache MISS for {Key}", key);
+                
+                // Record metric
+                TmsMeters.CacheMisses.Add(1, new KeyValuePair<string, object?>("key.kind", "course"));
+
+                return await _context.Courses
+                    .AsNoTracking()
+                    .Select(c => new CourseDto(
+                        c.Id,
+                        c.Code,
+                        c.Title,
+                        c.MaxCapacity,
+                        c.Enrollments.Count))
+                    .ToListAsync(token);
+            },
+            cancellationToken: ct);
+
+        if (!dbHit)
+        {
+            _logger.LogInformation("Cache HIT for {Key}", key);
+            // Record metric
+            TmsMeters.CacheHits.Add(1, new KeyValuePair<string, object?>("key.kind", "course"));
+        }
+
+        return courses;
     }
 
     public async Task InvalidateCourseCacheAsync(CancellationToken ct = default)
