@@ -114,7 +114,7 @@ builder.Services.AddDbContext<TmsDbContext>(options =>
 // ===== Problem Details =====
 builder.Services.AddProblemDetails();
 
-builder.Services.AddCors(options =>
+/*builder.Services.AddCors(options =>
 {
     options.AddPolicy("DevCors", policy =>
     {
@@ -123,13 +123,22 @@ builder.Services.AddCors(options =>
               .AllowAnyMethod()
               .AllowCredentials();
     });
-});
+});*/
 
 /* ===== EXERCISE 5: Add Controllers Service =====
 builder.Services.AddControllers();*/
 builder.Services.AddControllers(options =>
 {
     options.Filters.Add<AuditLogFilter>();
+});
+
+// After builder.Services.AddControllers()
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAngular", policy =>
+        policy.WithOrigins("http://localhost:4200")
+              .AllowAnyHeader()
+              .AllowAnyMethod());
 });
 
 builder.Services.AddHybridCache(options =>
@@ -409,8 +418,8 @@ app.UseMiddleware<RequestLoggingMiddleware>();    // from Session 1
 app.UseExceptionHandler();                        // catches exceptions
 app.UseStatusCodePages();                         // adds ProblemDetails for status codes like 404
 
-app.UseCors("DevCors");
 app.UseRouting();
+app.UseCors("AllowAngular");
 app.UseRateLimiter();
 app.MapHub<TmsHub>("/hubs/tms");
 app.UseAuthentication();

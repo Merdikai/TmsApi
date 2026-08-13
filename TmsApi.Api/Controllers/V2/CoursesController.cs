@@ -73,4 +73,15 @@ public class CoursesController : ControllerBase
             Links = links
         });
     }
+
+    [HttpGet("{id:int}")]
+    public async Task<IActionResult> GetCourseById(int id, CancellationToken ct = default)
+    {
+        var allCourses = await _cachedCourseService.GetAllCoursesAsync(ct);
+        var course = allCourses.FirstOrDefault(c => c.Id == id);
+        if (course is null)
+            return NotFound();
+
+        return Ok(course);
+    }
 }

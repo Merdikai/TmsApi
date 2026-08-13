@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.Json;
 
 namespace TmsApi.Application.Utilities;
 
@@ -16,7 +17,7 @@ public static class DataShaper
 
         if (string.IsNullOrWhiteSpace(fields))
             return source.Select(e => properties.ToDictionary(
-                p => p.Name, p => p.GetValue(e)));
+                p => JsonNamingPolicy.CamelCase.ConvertName(p.Name), p => p.GetValue(e)));
 
         var requested = fields
             .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
@@ -36,6 +37,6 @@ public static class DataShaper
             .ToList();
 
         return source.Select(e => picked.ToDictionary(
-            p => p.Name, p => p.GetValue(e)));
+            p => JsonNamingPolicy.CamelCase.ConvertName(p.Name), p => p.GetValue(e)));
     }
 }
