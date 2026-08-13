@@ -23,7 +23,7 @@
     connectBtn.addEventListener('click', async () => {
       log('Starting connection...');
       const connection = new signalR.HubConnectionBuilder()
-        .withUrl('http://localhost:5280/hubs/tms?studentId=1')
+        .withUrl('http://localhost:5282/hubs/tms?studentId=1')
         .withAutomaticReconnect()
         .build();
 
