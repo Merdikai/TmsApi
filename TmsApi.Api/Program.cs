@@ -136,9 +136,10 @@ builder.Services.AddControllers(options =>
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAngular", policy =>
-        policy.WithOrigins("http://localhost:4200")
+        policy.SetIsOriginAllowed(_ => true)
               .AllowAnyHeader()
-              .AllowAnyMethod());
+              .AllowAnyMethod()
+              .AllowCredentials());
 });
 
 builder.Services.AddHybridCache(options =>
@@ -258,10 +259,14 @@ builder.Services.AddProblemDetails();
 
 builder.Services.AddApiVersioning(options =>
 {
-    options.DefaultApiVersion = new ApiVersion(1, 0);
+    options.DefaultApiVersion = new ApiVersion(2, 0);
     options.AssumeDefaultVersionWhenUnspecified = true;
     options.ReportApiVersions = true;
-    options.ApiVersionReader = new UrlSegmentApiVersionReader();
+    options.ApiVersionReader = ApiVersionReader.Combine(
+        new UrlSegmentApiVersionReader(),
+        new HeaderApiVersionReader("x-api-version"),
+        new QueryStringApiVersionReader("api-version")
+    );
 })
 .AddApiExplorer(options =>
 {
@@ -421,7 +426,6 @@ app.UseStatusCodePages();                         // adds ProblemDetails for sta
 app.UseRouting();
 app.UseCors("AllowAngular");
 app.UseRateLimiter();
-app.MapHub<TmsHub>("/hubs/tms");
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -436,6 +440,7 @@ if (app.Environment.IsDevelopment())
 app.UseMiddleware<V1DeprecationMiddleware>();
 // ===== EXERCISE 5: Map Controllers =====
 app.MapControllers();
+app.MapHub<TmsHub>("/hubs/tms");
 
 app.MapGet("/", () => Results.Ok(new
 {
