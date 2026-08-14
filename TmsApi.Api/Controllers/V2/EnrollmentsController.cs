@@ -13,6 +13,8 @@ namespace TmsApi.Api.Controllers.V2;
 [Route("api/v{version:apiVersion}/enrollments")]
 [Route("api/enrollments")]
 [ApiVersion("2.0")]
+[ApiVersion("1.0")]
+[Route("api/v1/enrollments")]
 public class EnrollmentsController : ControllerBase
 {
     private readonly IMediator _mediator;

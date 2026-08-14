@@ -399,6 +399,24 @@ builder.Services.AddOpenTelemetry()
         .AddOtlpExporter());
 
 
+// Load allowed origins from appsettings.Development.json
+var allowedOrigins = builder.Configuration
+    .GetSection("AllowedOrigins")
+    .Get<string[]>() ?? ["http://localhost:4200"];
+
+// Register the CORS policy in the Dependency Injection container
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("TmsClient", policy =>
+    {
+        policy.WithOrigins(allowedOrigins)
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials()  // Vital for HttpOnly auth cookies
+              .SetPreflightMaxAge(TimeSpan.FromMinutes(10));
+    });
+});
+
 var app = builder.Build();
 
 app.MapHealthChecks("/health/live", new HealthCheckOptions
@@ -424,7 +442,7 @@ app.UseExceptionHandler();                        // catches exceptions
 app.UseStatusCodePages();                         // adds ProblemDetails for status codes like 404
 
 app.UseRouting();
-app.UseCors("AllowAngular");
+app.UseCors("TmsClient");
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
