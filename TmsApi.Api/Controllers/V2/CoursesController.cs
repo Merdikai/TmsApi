@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using TmsApi.Application.DTOs;
@@ -84,4 +85,32 @@ public class CoursesController : ControllerBase
 
         return Ok(course);
     }
+
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> Delete(int id, [FromServices] TmsApi.Infrastructure.Persistence.TmsDbContext db, CancellationToken ct)
+    {
+        var course = await db.Courses.Include(c => c.Enrollments).FirstOrDefaultAsync(c => c.Id == id, ct);
+        if (course == null)
+        {
+            return Problem(
+                statusCode: StatusCodes.Status404NotFound,
+                title: "Course not found",
+                detail: $"Course with ID {id} was not found.",
+                type: "https://tms.local/errors/not-found");
+        }
+
+        if (course.Enrollments.Any())
+        {
+            return Problem(
+                statusCode: StatusCodes.Status409Conflict,
+                title: "Course deletion failed",
+                detail: "Cannot delete course: active student enrollments exist.",
+                type: "https://tms.local/errors/active-enrollments-exist");
+        }
+
+        db.Courses.Remove(course);
+        await db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
 }

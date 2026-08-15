@@ -444,7 +444,7 @@ if (app.Environment.IsDevelopment())
 app.UseMiddleware<V1DeprecationMiddleware>();
 // ===== EXERCISE 5: Map Controllers =====
 app.MapControllers();
-app.MapHub<TmsHub>("/hubs/tms");
+app.MapHub<TmsHub>("/hubs/tms").RequireCors("TmsClient");
 
 app.MapGet("/", () => Results.Ok(new
 {
