@@ -6,7 +6,7 @@ namespace TmsApi.Infrastructure.Persistence;
 
 public static class DataSeeder
 {
-    private static readonly (string Code, string Title, int MaxCapacity)[] Courses =
+    public static readonly (string Code, string Title, int MaxCapacity)[] CourseList =
     [
         ("CSE-101", "Web Development Fundamentals", 30),
         ("CSE-102", "TypeScript Essentials", 30),
@@ -39,19 +39,19 @@ public static class DataSeeder
     {
         await context.Database.MigrateAsync(ct);
 
-        if (await context.Courses.AnyAsync(ct))
-        {
-            return; // Already seeded, skip
-        }
+        var existingCodes = await context.Courses.Select(c => c.Code).ToListAsync(ct);
 
-        foreach (var (code, title, maxCapacity) in Courses)
+        foreach (var (code, title, maxCapacity) in CourseList)
         {
-            context.Courses.Add(new Course
+            if (!existingCodes.Contains(code))
             {
-                Code = code,
-                Title = title,
-                MaxCapacity = maxCapacity
-            });
+                context.Courses.Add(new Course
+                {
+                    Code = code,
+                    Title = title,
+                    MaxCapacity = maxCapacity
+                });
+            }
         }
 
         await context.SaveChangesAsync(ct);
