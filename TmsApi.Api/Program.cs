@@ -1,47 +1,3 @@
-/* var builder = WebApplication.CreateBuilder(args);
-
-// Services: add authentication / authorization services
-builder.Services.AddAuthentication("Bearer")
-    .AddJwtBearer(options =>
-    {
-        options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
-        {
-            ValidateIssuer = false,
-            ValidateAudience = false,
-            ValidateLifetime = false,
-            ValidateIssuerSigningKey = false
-        };
-    });
-builder.Services.AddAuthorization();
-
-var app = builder.Build();
-
-// =============================================
-// EXERCISE 1B: Add custom logging middleware FIRST
-// =============================================
-app.UseMiddleware<RequestLoggingMiddleware>();
-
-// (Optional) UseExceptionHandler - add it here if you want, 
-// but it's fine to leave it out for now as we are just logging.
-// app.UseExceptionHandler(); 
-
-app.UseRouting();
-app.UseAuthentication();
-app.UseAuthorization();
-
-app.MapGet("/api/assessments/results", () => Results.Ok(new
-{
-    courseCode = "CS-101",
-    studentId = "S-001",
-    letterGrade = "A"
-}))
-.RequireAuthorization();
-
-app.Run();
-*/
-
-
-
 
 using Microsoft.EntityFrameworkCore;
 //using TmsApi.Data;
@@ -88,6 +44,7 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
+using Microsoft.AspNetCore.Antiforgery;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -417,6 +374,13 @@ builder.Services.AddCors(options =>
     });
 });
 
+
+// Add Antiforgery service with header name matching Angular's default convention
+builder.Services.AddAntiforgery(options =>
+{
+    options.HeaderName = "X-XSRF-TOKEN";
+});
+
 var app = builder.Build();
 
 app.MapHealthChecks("/health/live", new HealthCheckOptions
@@ -446,6 +410,28 @@ app.UseCors("TmsClient");
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+// Issue XSRF-TOKEN cookie for authenticated users
+app.Use(async (context, next) =>
+{
+    if (context.User.Identity?.IsAuthenticated == true || 
+        context.Request.Cookies.ContainsKey("tms_auth"))
+    {
+        var antiforgery = context.RequestServices
+            .GetRequiredService<IAntiforgery>();
+
+        var tokens = antiforgery.GetAndStoreTokens(context);
+
+        context.Response.Cookies.Append("XSRF-TOKEN", tokens.RequestToken!, new CookieOptions
+{
+    HttpOnly = false,      // MUST be false so Angular JavaScript can read it
+    Secure = !app.Environment.IsDevelopment(),
+    SameSite = SameSiteMode.Strict
+});
+
+    }
+
+    await next(context);
+});
 
 // Environment-aware configuration
 if (app.Environment.IsDevelopment())
