@@ -1,8 +1,12 @@
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using TmsApi.Domain.Entities;
+using TmsApi.Infrastructure.Persistence;
+using TmsApi.Infrastructure.Services;
 
 namespace TmsApi.Api.Controllers;
 
@@ -14,15 +18,21 @@ public class AuthController : ControllerBase
 {
     private readonly UserManager<TmsUser> _userManager;
     private readonly RoleManager<IdentityRole> _roleManager;
+    private readonly TmsDbContext _context;
+    private readonly TokenService _tokenService;
     private readonly IWebHostEnvironment _env;
 
     public AuthController(
         UserManager<TmsUser> userManager,
         RoleManager<IdentityRole> roleManager,
+        TmsDbContext context,
+        TokenService tokenService,
         IWebHostEnvironment env)
     {
         _userManager = userManager;
         _roleManager = roleManager;
+        _context = context;
+        _tokenService = tokenService;
         _env = env;
     }
 
@@ -37,7 +47,6 @@ public class AuthController : ControllerBase
     [HttpPost("register")]
     public async Task<IActionResult> Register([FromBody] RegisterRequest request)
     {
-        // Prevent account enumeration by returning a generic response
         var existingUser = await _userManager.FindByEmailAsync(request.Email);
         if (existingUser != null)
         {
@@ -61,7 +70,6 @@ public class AuthController : ControllerBase
 
         var roleToAssign = string.IsNullOrWhiteSpace(request.Role) ? "Student" : request.Role;
 
-        // Ensure requested role exists
         if (!await _roleManager.RoleExistsAsync(roleToAssign))
         {
             await _roleManager.CreateAsync(new IdentityRole(roleToAssign));
@@ -88,16 +96,14 @@ public class AuthController : ControllerBase
 
         if (user == null)
         {
-            // Demo fallback for test users if not in DB yet
             if (identifier.Equals("admin", StringComparison.OrdinalIgnoreCase) && request.Password == "Password123!")
             {
                 AppendAuthCookie("admin", "Admin");
-                return Ok(new { displayName = "Admin", role = "Admin" });
+                return Ok(new { accessToken = "demo.admin.token", refreshToken = "demo.admin.refresh", displayName = "Admin", role = "Admin" });
             }
             return Unauthorized(new { detail = "Invalid credentials." });
         }
 
-        // Check if account is locked out
         if (await _userManager.IsLockedOutAsync(user))
         {
             return StatusCode(423, new { detail = "Account locked due to multiple failed login attempts. Try again in 15 minutes." });
@@ -110,10 +116,8 @@ public class AuthController : ControllerBase
             return Unauthorized(new { detail = "Invalid credentials." });
         }
 
-        // Reset failed attempt counter on successful login
         await _userManager.ResetAccessFailedCountAsync(user);
 
-        // Update last login time
         user.LastLoginAt = DateTime.UtcNow;
         await _userManager.UpdateAsync(user);
 
@@ -123,10 +127,27 @@ public class AuthController : ControllerBase
             ? $"{user.FirstName} {user.LastName}".Trim() 
             : user.UserName ?? user.Email!;
 
+        var accessToken = _tokenService.GenerateJwt(user, roles);
+
+        // Issue initial Refresh Token
+        var refreshToken = new RefreshToken
+        {
+            Token = Guid.NewGuid().ToString("N"),
+            UserId = user.Id,
+            ExpiresAt = DateTime.UtcNow.AddDays(7),
+            IsUsed = false,
+            IsRevoked = false
+        };
+
+        _context.RefreshTokens.Add(refreshToken);
+        await _context.SaveChangesAsync();
+
         AppendAuthCookie(displayName, primaryRole);
 
         return Ok(new
         {
+            accessToken,
+            refreshToken = refreshToken.Token,
             userId = user.Id,
             email = user.Email,
             firstName = user.FirstName,
@@ -137,10 +158,99 @@ public class AuthController : ControllerBase
         });
     }
 
-    // ===== Me =====
-    [HttpGet("me")]
-    public IActionResult Me()
+    // ===== Refresh Token =====
+    public record RefreshRequest(string RefreshToken);
+
+    [HttpPost("refresh")]
+    public async Task<IActionResult> Refresh([FromBody] RefreshRequest request)
     {
+        var storedToken = await _context.RefreshTokens
+            .FirstOrDefaultAsync(rt => rt.Token == request.RefreshToken);
+
+        if (storedToken == null)
+        {
+            return Unauthorized(new { detail = "Invalid refresh token." });
+        }
+
+        // Theft Detection: If an ALREADY-USED token is submitted, revoke ALL tokens for this user!
+        if (storedToken.IsUsed)
+        {
+            var userTokens = await _context.RefreshTokens
+                .Where(rt => rt.UserId == storedToken.UserId)
+                .ToListAsync();
+
+            foreach (var t in userTokens)
+            {
+                t.IsRevoked = true;
+            }
+
+            await _context.SaveChangesAsync();
+            return Unauthorized(new { detail = "Token theft detected. All user sessions revoked." });
+        }
+
+        if (storedToken.IsRevoked || storedToken.ExpiresAt < DateTime.UtcNow)
+        {
+            return Unauthorized(new { detail = "Refresh token expired or revoked." });
+        }
+
+        // Mark current token as used (single-use)
+        storedToken.IsUsed = true;
+
+        // Issue brand-new Refresh Token pair
+        var newRefreshToken = new RefreshToken
+        {
+            Token = Guid.NewGuid().ToString("N"),
+            UserId = storedToken.UserId,
+            ExpiresAt = DateTime.UtcNow.AddDays(7),
+            IsUsed = false,
+            IsRevoked = false
+        };
+
+        _context.RefreshTokens.Add(newRefreshToken);
+        await _context.SaveChangesAsync();
+
+        var user = await _userManager.FindByIdAsync(storedToken.UserId);
+        if (user == null)
+        {
+            return Unauthorized(new { detail = "User not found." });
+        }
+
+        var roles = await _userManager.GetRolesAsync(user);
+        var newAccessToken = _tokenService.GenerateJwt(user, roles);
+
+        return Ok(new
+        {
+            accessToken = newAccessToken,
+            refreshToken = newRefreshToken.Token
+        });
+    }
+
+    // ===== Get Current User =====
+    [HttpGet("me")]
+    public async Task<IActionResult> GetCurrentUser()
+    {
+        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                     ?? User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+
+        if (!string.IsNullOrEmpty(userId))
+        {
+            var user = await _userManager.FindByIdAsync(userId);
+            if (user != null)
+            {
+                var roles = await _userManager.GetRolesAsync(user);
+                return Ok(new
+                {
+                    userId = user.Id,
+                    email = user.Email,
+                    firstName = user.FirstName,
+                    lastName = user.LastName,
+                    displayName = $"{user.FirstName} {user.LastName}".Trim(),
+                    role = roles.FirstOrDefault() ?? "Student",
+                    roles
+                });
+            }
+        }
+
         if (Request.Cookies.TryGetValue("tms_auth", out var token) && !string.IsNullOrEmpty(token))
         {
             var parts = token.Split(':');

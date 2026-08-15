@@ -1,3 +1,7 @@
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+using TmsApi.Infrastructure.Services;
 using Microsoft.AspNetCore.Identity;
 
 using Microsoft.EntityFrameworkCore;
@@ -10,7 +14,6 @@ using Scalar.AspNetCore;
 using TmsApi.Api.Exceptions;
 using TmsApi.Api.Filters;
 using TmsApi.Infrastructure.Persistence;        // for TmsDbContext
-using TmsApi.Infrastructure.Services;
 using TmsApi.Infrastructure.ExternalServices;
 using TmsApi.Domain.Entities;                   // if you use entities directly in Program.cs (seed data)
 using TmsApi.Application.Interfaces;            // for ICourseService, IEnrollmentService
@@ -50,17 +53,7 @@ using Microsoft.AspNetCore.Antiforgery;
 var builder = WebApplication.CreateBuilder(args);
 
 // Authentication/Authorization
-builder.Services.AddAuthentication("Bearer")
-    .AddJwtBearer(options =>
-    {
-        options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
-        {
-            ValidateIssuer = false,
-            ValidateAudience = false,
-            ValidateLifetime = false,
-            ValidateIssuerSigningKey = false
-        };
-    });
+// JWT Bearer authentication registered in Authentication Pipeline section
 builder.Services.AddAuthorization();
 
 // ===== Database Context =====
@@ -383,6 +376,30 @@ builder.Services.AddAntiforgery(options =>
 });
 
 // Add Identity Core with enterprise password and lockout policies
+// Register TokenService
+builder.Services.AddScoped<TokenService>();
+
+// Configure JWT Bearer Authentication
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    var jwtKey = builder.Configuration["Jwt:Key"] ?? "A-Very-Long-Secret-Key-For-TMS-Auth-Stored-Safely-2026-Minimum-32-Bytes!";
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = builder.Configuration["Jwt:Issuer"] ?? "https://localhost:5001",
+        ValidAudience = builder.Configuration["Jwt:Audience"] ?? "tms-client",
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
+    };
+});
+
 builder.Services.AddIdentityCore<TmsUser>(options =>
 {
     // Enterprise Password Policy
