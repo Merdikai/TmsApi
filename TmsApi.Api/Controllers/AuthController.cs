@@ -1,6 +1,7 @@
 using Asp.Versioning;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
-using TmsApi.Application.DTOs;
+using TmsApi.Domain.Entities;
 
 namespace TmsApi.Api.Controllers;
 
@@ -10,49 +11,111 @@ namespace TmsApi.Api.Controllers;
 [ApiVersion("1.0")]
 public class AuthController : ControllerBase
 {
-    private readonly IWebHostEnvironment _env;
+    private readonly UserManager<TmsUser> _userManager;
+    private readonly RoleManager<IdentityRole> _roleManager;
 
-    public AuthController(IWebHostEnvironment env)
+    public AuthController(
+        UserManager<TmsUser> userManager,
+        RoleManager<IdentityRole> roleManager)
     {
-        _env = env;
+        _userManager = userManager;
+        _roleManager = roleManager;
     }
+
+    // ===== Register =====
+    public record RegisterRequest(
+        string Email,
+        string Password,
+        string FirstName,
+        string LastName,
+        string? Role);
+
+    [HttpPost("register")]
+    public async Task<IActionResult> Register([FromBody] RegisterRequest request)
+    {
+        // Prevent account enumeration by returning a generic response
+        var existingUser = await _userManager.FindByEmailAsync(request.Email);
+        if (existingUser != null)
+        {
+            return Ok(new { message = "Registration request received." });
+        }
+
+        var user = new TmsUser
+        {
+            UserName = request.Email,
+            Email = request.Email,
+            FirstName = request.FirstName,
+            LastName = request.LastName
+        };
+
+        var result = await _userManager.CreateAsync(user, request.Password);
+        if (!result.Succeeded)
+        {
+            var errors = result.Errors.Select(e => e.Description);
+            return BadRequest(new { errors });
+        }
+
+        var roleToAssign = string.IsNullOrWhiteSpace(request.Role) ? "Student" : request.Role;
+
+        // Ensure requested role exists
+        if (!await _roleManager.RoleExistsAsync(roleToAssign))
+        {
+            await _roleManager.CreateAsync(new IdentityRole(roleToAssign));
+        }
+
+        await _userManager.AddToRoleAsync(user, roleToAssign);
+        return StatusCode(201, new { message = "User registered successfully." });
+    }
+
+    // ===== Login =====
+    public record LoginRequest(string Email, string Password);
 
     [HttpPost("login")]
-    public IActionResult Login([FromBody] LoginRequest request)
+    public async Task<IActionResult> Login([FromBody] LoginRequest request)
     {
-        if (request.Username == "admin" && request.Password == "Password123!")
+        var user = await _userManager.FindByEmailAsync(request.Email);
+        if (user == null)
         {
-            var dummyJwt = "header.payload.signature-demo-token";
-
-            Response.Cookies.Append("tms_auth", dummyJwt, new CookieOptions
-            {
-                HttpOnly = true,
-                Secure = !_env.IsDevelopment(),
-                SameSite = SameSiteMode.Strict,
-                Expires = DateTimeOffset.UtcNow.AddHours(2)
-            });
-
-            return Ok(new UserProfileDto("System Admin", "Admin"));
+            return Unauthorized(new { detail = "Invalid credentials." });
         }
 
-        return Unauthorized(new { detail = "Invalid username or password." });
-    }
-
-    [HttpGet("me")]
-    public IActionResult GetCurrentUser()
-    {
-        if (Request.Cookies.TryGetValue("tms_auth", out _))
+        // Check if account is locked out
+        if (await _userManager.IsLockedOutAsync(user))
         {
-            return Ok(new UserProfileDto("System Admin", "Admin"));
+            return StatusCode(423, new { detail = "Account locked due to multiple failed login attempts. Try again in 15 minutes." });
         }
 
-        return Unauthorized(new { detail = "Session expired or missing authentication cookie." });
+        var validPassword = await _userManager.CheckPasswordAsync(user, request.Password);
+        if (!validPassword)
+        {
+            await _userManager.AccessFailedAsync(user);
+            return Unauthorized(new { detail = "Invalid credentials." });
+        }
+
+        // Reset failed attempt counter on successful login
+        await _userManager.ResetAccessFailedCountAsync(user);
+
+        // Update last login time
+        user.LastLoginAt = DateTime.UtcNow;
+        await _userManager.UpdateAsync(user);
+
+        return Ok(new
+        {
+            userId = user.Id,
+            email = user.Email,
+            firstName = user.FirstName,
+            lastName = user.LastName,
+            roles = await _userManager.GetRolesAsync(user)
+        });
     }
 
-    [HttpPost("logout")]
-    public IActionResult Logout()
+    // ===== Check if email exists =====
+    [HttpPost("check-email")]
+    public async Task<IActionResult> CheckEmail([FromBody] CheckEmailRequest request)
     {
-        Response.Cookies.Delete("tms_auth");
-        return Ok(new { message = "Logged out successfully." });
+        var user = await _userManager.FindByEmailAsync(request.Email);
+        return Ok(new { exists = user != null });
     }
+
+    public record CheckEmailRequest(string Email);
 }
