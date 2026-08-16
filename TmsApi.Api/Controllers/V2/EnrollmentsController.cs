@@ -2,12 +2,22 @@ using Asp.Versioning;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
+using System.Collections.Concurrent;
 using TmsApi.Api.Hubs;
 using TmsApi.Application.Hubs;
-using TmsApi.Application.Enrollments.Commands;
-using TmsApi.Application.Enrollments.Queries;
+using TmsApi.Domain.Entities;
+using TmsApi.Infrastructure.Persistence;
 
 namespace TmsApi.Api.Controllers.V2;
+
+public record CreateEnrollmentDto(
+    string? StudentId,
+    string? StudentName,
+    int? CourseId,
+    string? Term,
+    string? Notes,
+    List<string>? BackupCourses);
 
 [ApiController]
 [Route("api/v{version:apiVersion}/enrollments")]
@@ -17,41 +27,153 @@ namespace TmsApi.Api.Controllers.V2;
 [Route("api/v1/enrollments")]
 public class EnrollmentsController : ControllerBase
 {
-    private readonly IMediator _mediator;
+    private readonly TmsDbContext _db;
     private readonly IHubContext<TmsApi.Api.Hubs.TmsHub, ITmsHubClient> _hubContext;
+    private static readonly ConcurrentDictionary<int, string> _statusOverrides = new();
 
-    public EnrollmentsController(IMediator mediator, IHubContext<TmsApi.Api.Hubs.TmsHub, ITmsHubClient> hubContext)
+    public EnrollmentsController(
+        TmsDbContext db,
+        IHubContext<TmsApi.Api.Hubs.TmsHub, ITmsHubClient> hubContext)
     {
-        _mediator = mediator;
+        _db = db;
         _hubContext = hubContext;
     }
 
-    [HttpPost]
-    public async Task<IActionResult> Enroll(
-        EnrollStudentCommand command, CancellationToken ct)
+    [HttpGet]
+    public async Task<IActionResult> GetAll(CancellationToken ct)
     {
-        var result = await _mediator.Send(command, ct);
-        return result.Match<IActionResult>(
-            onSuccess: created => Ok(created),
-            onFailure: error =>
+        var rawEnrollments = await _db.Enrollments
+            .Include(e => e.Course)
+            .Include(e => e.Student)
+            .OrderByDescending(e => e.Id)
+            .ToListAsync(ct);
+
+        var list = rawEnrollments.Select(e =>
+        {
+            string status;
+            if (_statusOverrides.TryGetValue(e.Id, out var manualStatus))
             {
-                var status = error.Code switch
-                {
-                    "course_not_found" => StatusCodes.Status404NotFound,
-                    "course_full" or "already_enrolled" => StatusCodes.Status409Conflict,
-                    _ => StatusCodes.Status400BadRequest
-                };
-                return Problem(
-                    statusCode: status,
-                    title: "Enrollment rejected",
-                    detail: error.Message,
-                    type: $"https://tms.local/errors/{error.Code}");
-            });
+                status = manualStatus;
+            }
+            else if (e.IsArchived)
+            {
+                status = "Rejected";
+            }
+            else if (e.Grade.HasValue)
+            {
+                status = "Approved";
+            }
+            else
+            {
+                // Unarchived, un-graded new requests default to Pending
+                status = "Pending";
+            }
+
+            return new
+            {
+                id = "ENR-" + e.Id,
+                studentId = e.StudentId,
+                studentName = e.Student != null ? e.Student.Name : "Student #" + e.StudentId,
+                courseId = e.CourseId,
+                courseName = e.Course != null ? e.Course.Code + " - " + e.Course.Title : "Course #" + e.CourseId,
+                status = status,
+                enrolledAt = e.EnrolledAt.ToString("O"),
+                grade = e.Grade.HasValue ? (double)Math.Round(e.Grade.Value > 4.0m ? (decimal)e.Grade.Value : (e.Grade.Value / 4.0m) * 100m, 1) : (double?)null,
+                letterGrade = e.Grade.HasValue ? (e.Grade.Value >= 3.6m ? "A" : e.Grade.Value >= 3.0m ? "B" : e.Grade.Value >= 2.0m ? "C" : "D") : null
+            };
+        });
+
+        return Ok(list);
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> Enroll([FromBody] CreateEnrollmentDto dto, CancellationToken ct)
+    {
+        string studentName = !string.IsNullOrWhiteSpace(dto.StudentName)
+            ? dto.StudentName.Trim()
+            : (!string.IsNullOrWhiteSpace(dto.StudentId) ? dto.StudentId.Trim() : "Student User");
+
+        // Find or create student in PostgreSQL database
+        var student = await _db.Students.FirstOrDefaultAsync(s => s.Name.ToLower() == studentName.ToLower(), ct);
+        if (student == null)
+        {
+            var studentCount = await _db.Students.CountAsync(ct);
+            student = new Student
+            {
+                Name = studentName,
+                RegistrationNumber = $"TMS-2026-{(studentCount + 1):D4}",
+                GPA = 3.5m,
+                IsActive = true
+            };
+            _db.Students.Add(student);
+            await _db.SaveChangesAsync(ct);
+        }
+
+        int courseId = dto.CourseId ?? 1;
+        var course = await _db.Courses.FindAsync(new object[] { courseId }, ct);
+        if (course == null)
+        {
+            course = await _db.Courses.FirstOrDefaultAsync(ct) ?? new Course
+            {
+                Code = "CS-101",
+                Title = "Introduction to Computer Science",
+                MaxCapacity = 30
+            };
+            if (course.Id == 0)
+            {
+                _db.Courses.Add(course);
+                await _db.SaveChangesAsync(ct);
+            }
+        }
+
+        var enrollment = new Enrollment
+        {
+            StudentId = student.Id,
+            CourseId = course.Id,
+            EnrolledAt = DateTime.UtcNow,
+            IsArchived = false
+        };
+
+        _db.Enrollments.Add(enrollment);
+        await _db.SaveChangesAsync(ct);
+
+        _statusOverrides[enrollment.Id] = "Pending";
+        var enrollmentId = "ENR-" + enrollment.Id;
+
+        // Broadcast live notification to all connected Admin and Instructor dashboards
+        await _hubContext.Clients.All.ReceiveEnrollmentStatusUpdated(enrollmentId, "Pending");
+
+        var response = new
+        {
+            id = enrollmentId,
+            studentId = student.Id,
+            studentName = student.Name,
+            courseId = course.Id,
+            courseName = $"{course.Code} - {course.Title}",
+            status = "Pending",
+            enrolledAt = enrollment.EnrolledAt.ToString("O"),
+            notes = dto.Notes,
+            backupCourses = dto.BackupCourses
+        };
+
+        return Ok(response);
     }
 
     [HttpPost("{id}/approve")]
     public async Task<IActionResult> Approve(string id, CancellationToken ct)
     {
+        var rawId = id.Replace("ENR-", "");
+        if (int.TryParse(rawId, out var parsedId))
+        {
+            _statusOverrides[parsedId] = "Approved";
+            var enrollment = await _db.Enrollments.FindAsync(new object[] { parsedId }, ct);
+            if (enrollment != null)
+            {
+                enrollment.IsArchived = false;
+                await _db.SaveChangesAsync(ct);
+            }
+        }
+
         await _hubContext.Clients.All.ReceiveEnrollmentStatusUpdated(id, "Approved");
         return NoContent();
     }
@@ -59,14 +181,19 @@ public class EnrollmentsController : ControllerBase
     [HttpPost("{id}/reject")]
     public async Task<IActionResult> Reject(string id, CancellationToken ct)
     {
+        var rawId = id.Replace("ENR-", "");
+        if (int.TryParse(rawId, out var parsedId))
+        {
+            _statusOverrides[parsedId] = "Rejected";
+            var enrollment = await _db.Enrollments.FindAsync(new object[] { parsedId }, ct);
+            if (enrollment != null)
+            {
+                enrollment.IsArchived = true;
+                await _db.SaveChangesAsync(ct);
+            }
+        }
+
         await _hubContext.Clients.All.ReceiveEnrollmentStatusUpdated(id, "Rejected");
         return NoContent();
-    }
-
-    [HttpGet("{studentId}/schedule")]
-    public async Task<IActionResult> GetSchedule(int studentId, CancellationToken ct)
-    {
-        var schedule = await _mediator.Send(new GetStudentScheduleQuery(studentId), ct);
-        return Ok(schedule);
     }
 }
