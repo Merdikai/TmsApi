@@ -500,6 +500,53 @@ app.MapGet("/api/assessments/results", () => Results.Ok(new
 }))
 .RequireAuthorization();
 
+
+
+
+
+
+
+
+// Grade Submission Endpoint
+
+
+
+
+// Grade Submission Endpoints
+app.MapPost("/api/v1/grades", async (TmsDbContext db, GradeSubmitDto dto) =>
+{
+    var enrollment = await db.Enrollments
+        .FirstOrDefaultAsync(e => e.StudentId == dto.StudentId && e.CourseId == dto.CourseId);
+
+    decimal gradeVal = dto.Score > 4.0 ? (decimal)Math.Min(4.0, (dto.Score / 100.0) * 4.0) : (decimal)dto.Score;
+
+    if (enrollment != null)
+    {
+        enrollment.Grade = gradeVal;
+        await db.SaveChangesAsync();
+    }
+
+    var recordId = "GRD-" + Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+    return Results.Ok(new { id = recordId, success = true });
+});
+
+app.MapPost("/api/grades", async (TmsDbContext db, GradeSubmitDto dto) =>
+{
+    var enrollment = await db.Enrollments
+        .FirstOrDefaultAsync(e => e.StudentId == dto.StudentId && e.CourseId == dto.CourseId);
+
+    decimal gradeVal = dto.Score > 4.0 ? (decimal)Math.Min(4.0, (dto.Score / 100.0) * 4.0) : (decimal)dto.Score;
+
+    if (enrollment != null)
+    {
+        enrollment.Grade = gradeVal;
+        await db.SaveChangesAsync();
+    }
+
+    var recordId = "GRD-" + Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+    return Results.Ok(new { id = recordId, success = true });
+});
+
 // Session 2 Smoke Test Endpoint
 app.MapGet("/api/enrollments/worker-smoke", (EnrollmentWorker worker) =>
 {
@@ -610,3 +657,4 @@ app.MapPost("/fake/certificates", async () =>
 }).WithTags("lab-fixtures");
 
 app.Run();
+public record GradeSubmitDto(int StudentId, int CourseId, double Score);
