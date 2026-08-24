@@ -39,6 +39,28 @@ public class EnrollmentsController : ControllerBase
         _hubContext = hubContext;
     }
 
+    public static string GetEnrollmentStatus(Enrollment e)
+    {
+        if (_statusOverrides.TryGetValue(e.Id, out var manualStatus))
+        {
+            return manualStatus;
+        }
+        if (e.IsArchived)
+        {
+            return "Rejected";
+        }
+        if (e.Grade.HasValue)
+        {
+            return "Approved";
+        }
+        return "Pending";
+    }
+
+    public static bool IsEnrollmentApproved(Enrollment e)
+    {
+        return GetEnrollmentStatus(e) == "Approved";
+    }
+
     [HttpGet]
     public async Task<IActionResult> GetAll(CancellationToken ct)
     {
@@ -50,24 +72,7 @@ public class EnrollmentsController : ControllerBase
 
         var list = rawEnrollments.Select(e =>
         {
-            string status;
-            if (_statusOverrides.TryGetValue(e.Id, out var manualStatus))
-            {
-                status = manualStatus;
-            }
-            else if (e.IsArchived)
-            {
-                status = "Rejected";
-            }
-            else if (e.Grade.HasValue)
-            {
-                status = "Approved";
-            }
-            else
-            {
-                // Unarchived, un-graded new requests default to Pending
-                status = "Pending";
-            }
+            string status = GetEnrollmentStatus(e);
 
             return new
             {
@@ -76,6 +81,8 @@ public class EnrollmentsController : ControllerBase
                 studentName = e.Student != null ? e.Student.Name : "Student #" + e.StudentId,
                 courseId = e.CourseId,
                 courseName = e.Course != null ? e.Course.Code + " - " + e.Course.Title : "Course #" + e.CourseId,
+                courseInstructorId = e.Course != null ? e.Course.InstructorId : null,
+                courseInstructorName = e.Course != null && e.Course.Instructor != null ? (e.Course.Instructor.FirstName + " " + e.Course.Instructor.LastName).Trim() : (e.Course != null && !string.IsNullOrWhiteSpace(e.Course.InstructorId) ? e.Course.InstructorId : "Dr. Alex Taylor"),
                 status = status,
                 enrolledAt = e.EnrolledAt.ToString("O"),
                 grade = e.Grade.HasValue ? (double)Math.Round(e.Grade.Value > 4.0m ? (decimal)e.Grade.Value : (e.Grade.Value / 4.0m) * 100m, 1) : (double?)null,
@@ -93,7 +100,6 @@ public class EnrollmentsController : ControllerBase
             ? dto.StudentName.Trim()
             : (!string.IsNullOrWhiteSpace(dto.StudentId) ? dto.StudentId.Trim() : "Student User");
 
-        // Find or create student in PostgreSQL database
         var student = await _db.Students.FirstOrDefaultAsync(s => s.Name.ToLower() == studentName.ToLower(), ct);
         if (student == null)
         {
@@ -140,7 +146,6 @@ public class EnrollmentsController : ControllerBase
         _statusOverrides[enrollment.Id] = "Pending";
         var enrollmentId = "ENR-" + enrollment.Id;
 
-        // Broadcast live notification to all connected Admin and Instructor dashboards
         await _hubContext.Clients.All.ReceiveEnrollmentStatusUpdated(enrollmentId, "Pending");
 
         var response = new
