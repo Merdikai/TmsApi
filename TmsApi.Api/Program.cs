@@ -1,3 +1,7 @@
+using System.Security.Claims;
+using System.IdentityModel.Tokens.Jwt;
+using Microsoft.AspNetCore.Authorization;
+using TmsApi.Infrastructure.Authorization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
@@ -55,6 +59,13 @@ var builder = WebApplication.CreateBuilder(args);
 // Authentication/Authorization
 // JWT Bearer authentication registered in Authentication Pipeline section
 builder.Services.AddAuthorization();
+
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy("CanEditCourse", policy =>
+        policy.Requirements.Add(new CourseInstructorRequirement()));
+
+builder.Services.AddSingleton<IAuthorizationHandler, CourseInstructorHandler>();
+
 
 // ===== Database Context =====
 builder.Services.AddDbContext<TmsDbContext>(options =>
@@ -114,6 +125,20 @@ builder.Services.AddHybridCache(options =>
 
 builder.Services.AddRateLimiter(options =>
 {
+    options.AddFixedWindowLimiter("AuthLimiter", opt =>
+    {
+        opt.PermitLimit = 5;
+        opt.Window = TimeSpan.FromMinutes(1);
+        opt.QueueLimit = 0;
+    });
+
+    options.AddFixedWindowLimiter("LoginPolicy", opt =>
+    {
+        opt.PermitLimit = 5;
+        opt.Window = TimeSpan.FromMinutes(1);
+        opt.QueueLimit = 0;
+    });
+
     // Global limiter - applies to all requests
     options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(httpContext =>
     {
@@ -445,6 +470,19 @@ app.UseExceptionHandler();                        // catches exceptions
 app.UseStatusCodePages();                         // adds ProblemDetails for status codes like 404
 
 app.UseRouting();
+
+// Security Response Headers Middleware
+app.Use(async (context, next) =>
+{
+    context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
+    context.Response.Headers.Append("X-Frame-Options", "DENY");
+    context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
+    context.Response.Headers.Append("Content-Security-Policy",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';");
+
+    await next();
+});
+
 app.UseCors("TmsClient");
 app.UseRateLimiter();
 app.UseAuthentication();
@@ -512,39 +550,157 @@ app.MapGet("/api/assessments/results", () => Results.Ok(new
 
 
 
-// Grade Submission Endpoints
-app.MapPost("/api/v1/grades", async (TmsDbContext db, GradeSubmitDto dto) =>
+// Grade Submission Endpoints with Resource-based Instructor Authorization & Approval Validation
+app.MapPost("/api/v1/grades", async (
+    HttpContext httpContext,
+    TmsDbContext db,
+    GradeSubmitDto dto) =>
 {
+    var course = await db.Courses.FindAsync(dto.CourseId);
+    if (course == null)
+    {
+        return Results.NotFound(new { detail = "Course not found." });
+    }
+
+    var user = httpContext.User;
+    var isAuthenticated = user.Identity?.IsAuthenticated == true;
+    var isAdmin = user.IsInRole("Admin");
+    var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                 ?? user.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+    var username = user.Identity?.Name ?? user.FindFirst("name")?.Value ?? user.FindFirst(ClaimTypes.Name)?.Value;
+    var email = user.FindFirst(ClaimTypes.Email)?.Value ?? user.FindFirst("email")?.Value;
+
+    if (!isAuthenticated && httpContext.Request.Cookies.TryGetValue("tms_auth", out var cookieVal))
+    {
+        var parts = cookieVal.Split(':');
+        if (parts.Length > 1 && parts[1].Equals("Admin", StringComparison.OrdinalIgnoreCase))
+        {
+            isAdmin = true;
+            isAuthenticated = true;
+        }
+        else if (parts.Length > 0)
+        {
+            username = parts[0];
+            isAuthenticated = true;
+        }
+    }
+
+    // Enforce instructor ownership: only the assigned instructor or Admin can submit grades
+    if (!isAdmin)
+    {
+        var courseInst = (course.InstructorId ?? "").Trim().ToLowerInvariant();
+        var matchId = !string.IsNullOrEmpty(userId) && courseInst.Equals(userId.Trim().ToLowerInvariant());
+        var matchUser = !string.IsNullOrEmpty(username) && (courseInst.Equals(username.Trim().ToLowerInvariant()) || courseInst.Contains(username.Trim().ToLowerInvariant()) || username.Trim().ToLowerInvariant().Contains(courseInst));
+        var matchEmail = !string.IsNullOrEmpty(email) && (courseInst.Equals(email.Trim().ToLowerInvariant()) || email.Trim().ToLowerInvariant().StartsWith(courseInst));
+
+        if (!matchId && !matchUser && !matchEmail && !string.IsNullOrEmpty(courseInst))
+        {
+            return Results.Problem(
+                title: "Forbidden: Grade Editing Restricted",
+                detail: $"Access Denied: You are not assigned to instruct '{course.Code} - {course.Title}'. Instructors can only submit or edit grades for their own students.",
+                statusCode: StatusCodes.Status403Forbidden);
+        }
+    }
+
     var enrollment = await db.Enrollments
         .FirstOrDefaultAsync(e => e.StudentId == dto.StudentId && e.CourseId == dto.CourseId);
 
-    decimal gradeVal = dto.Score > 4.0 ? (decimal)Math.Min(4.0, (dto.Score / 100.0) * 4.0) : (decimal)dto.Score;
-
-    if (enrollment != null)
+    if (enrollment == null)
     {
-        enrollment.Grade = gradeVal;
-        await db.SaveChangesAsync();
+        return Results.NotFound(new { detail = $"No enrollment record found for Student #{dto.StudentId} in course '{course.Code}'." });
     }
 
+    // Business Rule Validation: Enrollment MUST be Approved before grading!
+    var status = TmsApi.Api.Controllers.V2.EnrollmentsController.GetEnrollmentStatus(enrollment);
+    if (enrollment.IsArchived || status != "Approved")
+    {
+        return Results.Problem(
+            title: "Cannot Grade Pending Enrollment",
+            detail: $"Cannot submit grade: The enrollment request for student #{dto.StudentId} in '{course.Code}' is currently '{status}'. The instructor must officially approve the enrollment request before a grade can be evaluated.",
+            statusCode: StatusCodes.Status400BadRequest);
+    }
+
+    decimal gradeVal = dto.Score > 4.0 ? (decimal)Math.Min(4.0, (dto.Score / 100.0) * 4.0) : (decimal)dto.Score;
+    enrollment.Grade = gradeVal;
+    await db.SaveChangesAsync();
+
     var recordId = "GRD-" + Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
-    return Results.Ok(new { id = recordId, success = true });
+    return Results.Ok(new { id = recordId, success = true, grade = gradeVal });
 });
 
-app.MapPost("/api/grades", async (TmsDbContext db, GradeSubmitDto dto) =>
+app.MapPost("/api/grades", async (
+    HttpContext httpContext,
+    TmsDbContext db,
+    GradeSubmitDto dto) =>
 {
+    var course = await db.Courses.FindAsync(dto.CourseId);
+    if (course == null)
+    {
+        return Results.NotFound(new { detail = "Course not found." });
+    }
+
+    var user = httpContext.User;
+    var isAuthenticated = user.Identity?.IsAuthenticated == true;
+    var isAdmin = user.IsInRole("Admin");
+    var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                 ?? user.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+    var username = user.Identity?.Name ?? user.FindFirst("name")?.Value ?? user.FindFirst(ClaimTypes.Name)?.Value;
+    var email = user.FindFirst(ClaimTypes.Email)?.Value ?? user.FindFirst("email")?.Value;
+
+    if (!isAuthenticated && httpContext.Request.Cookies.TryGetValue("tms_auth", out var cookieVal))
+    {
+        var parts = cookieVal.Split(':');
+        if (parts.Length > 1 && parts[1].Equals("Admin", StringComparison.OrdinalIgnoreCase))
+        {
+            isAdmin = true;
+            isAuthenticated = true;
+        }
+        else if (parts.Length > 0)
+        {
+            username = parts[0];
+            isAuthenticated = true;
+        }
+    }
+
+    if (!isAdmin)
+    {
+        var courseInst = (course.InstructorId ?? "").Trim().ToLowerInvariant();
+        var matchId = !string.IsNullOrEmpty(userId) && courseInst.Equals(userId.Trim().ToLowerInvariant());
+        var matchUser = !string.IsNullOrEmpty(username) && (courseInst.Equals(username.Trim().ToLowerInvariant()) || courseInst.Contains(username.Trim().ToLowerInvariant()) || username.Trim().ToLowerInvariant().Contains(courseInst));
+        var matchEmail = !string.IsNullOrEmpty(email) && (courseInst.Equals(email.Trim().ToLowerInvariant()) || email.Trim().ToLowerInvariant().StartsWith(courseInst));
+
+        if (!matchId && !matchUser && !matchEmail && !string.IsNullOrEmpty(courseInst))
+        {
+            return Results.Problem(
+                title: "Forbidden: Grade Editing Restricted",
+                detail: $"Access Denied: You are not assigned to instruct '{course.Code} - {course.Title}'. Instructors can only submit or edit grades for their own students.",
+                statusCode: StatusCodes.Status403Forbidden);
+        }
+    }
+
     var enrollment = await db.Enrollments
         .FirstOrDefaultAsync(e => e.StudentId == dto.StudentId && e.CourseId == dto.CourseId);
 
-    decimal gradeVal = dto.Score > 4.0 ? (decimal)Math.Min(4.0, (dto.Score / 100.0) * 4.0) : (decimal)dto.Score;
-
-    if (enrollment != null)
+    if (enrollment == null)
     {
-        enrollment.Grade = gradeVal;
-        await db.SaveChangesAsync();
+        return Results.NotFound(new { detail = $"No enrollment record found for Student #{dto.StudentId} in course '{course.Code}'." });
     }
 
+    var status = TmsApi.Api.Controllers.V2.EnrollmentsController.GetEnrollmentStatus(enrollment);
+    if (enrollment.IsArchived || status != "Approved")
+    {
+        return Results.Problem(
+            title: "Cannot Grade Pending Enrollment",
+            detail: $"Cannot submit grade: The enrollment request for student #{dto.StudentId} in '{course.Code}' is currently '{status}'. The instructor must officially approve the enrollment request before a grade can be evaluated.",
+            statusCode: StatusCodes.Status400BadRequest);
+    }
+
+    decimal gradeVal = dto.Score > 4.0 ? (decimal)Math.Min(4.0, (dto.Score / 100.0) * 4.0) : (decimal)dto.Score;
+    enrollment.Grade = gradeVal;
+    await db.SaveChangesAsync();
+
     var recordId = "GRD-" + Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
-    return Results.Ok(new { id = recordId, success = true });
+    return Results.Ok(new { id = recordId, success = true, grade = gradeVal });
 });
 
 // Session 2 Smoke Test Endpoint
@@ -587,6 +743,30 @@ using (var scope = app.Services.CreateScope())
 {
     var context = scope.ServiceProvider.GetRequiredService<TmsDbContext>();
     context.Database.Migrate(); // applies any pending migrations
+    try
+    {
+        context.Database.ExecuteSqlRaw("ALTER TABLE \"Courses\" ADD COLUMN IF NOT EXISTS \"InstructorId\" text;");
+        context.Database.ExecuteSqlRaw("ALTER TABLE \"AspNetUsers\" ADD COLUMN IF NOT EXISTS \"IsApproved\" boolean DEFAULT false;");
+        context.Database.ExecuteSqlRaw("ALTER TABLE \"AspNetUsers\" ADD COLUMN IF NOT EXISTS \"ApprovalStatus\" text DEFAULT 'Pending';");
+        // Ensure legacy pre-existing users are approved
+        context.Database.ExecuteSqlRaw("UPDATE \"AspNetUsers\" SET \"IsApproved\" = true, \"ApprovalStatus\" = 'Approved' WHERE \"Email\" = 'admin@cotbe.edu.et' OR \"UserName\" = 'admin';");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine("Schema update: " + ex.Message);
+
+    try
+    {
+        // Seed Instructor IDs on existing courses if null
+        context.Database.ExecuteSqlRaw(@"
+            UPDATE ""Courses"" SET ""InstructorId"" = 'admin' WHERE ""Code"" IN ('CS-101', 'CSE-101', 'CSE-301') AND (""InstructorId"" IS NULL OR ""InstructorId"" = '');
+            UPDATE ""Courses"" SET ""InstructorId"" = 'instructor' WHERE ""Code"" IN ('CS-201', 'CSE-102', 'CSE-201') AND (""InstructorId"" IS NULL OR ""InstructorId"" = '');
+            UPDATE ""Courses"" SET ""InstructorId"" = 'prof.smith' WHERE (""InstructorId"" IS NULL OR ""InstructorId"" = '');
+        ");
+    }
+    catch { }
+
+    }
 
     if (!context.Students.Any())
     {

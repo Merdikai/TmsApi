@@ -1,4 +1,5 @@
-//using System.Collections.Generic;
+using System.Collections.Generic;
+
 namespace TmsApi.Domain.Entities;
 
 public class Course
@@ -8,9 +9,10 @@ public class Course
     public required string Title { get; set; }
     public int MaxCapacity { get; set; }
 
+    public string? InstructorId { get; set; }        // Foreign key to TmsUser
+    public TmsUser? Instructor { get; set; }
+
     public ICollection<Enrollment> Enrollments { get; set; } = new List<Enrollment>();
-
-
     public ICollection<Assessment> Assessments { get; set; } = new List<Assessment>();
     public ICollection<Certificate> Certificates { get; set; } = new List<Certificate>();
 }
