@@ -1,4 +1,4 @@
-namespace TmsApi.Domain.Entities;
+﻿namespace TmsApi.Domain.Entities;
 
 public class Enrollment
 {
@@ -7,6 +7,10 @@ public class Enrollment
     public int CourseId { get; set; }
     public decimal? Grade { get; set; }            // nullable
     public DateTime EnrolledAt { get; set; } = DateTime.UtcNow;
+
+    public string Status { get; set; } = "Pending"; // Pending, Approved, Rejected
+    public string? Notes { get; set; }
+    public string? BackupCourses { get; set; }
 
     // Navigation properties
     public Student Student { get; set; } = null!;

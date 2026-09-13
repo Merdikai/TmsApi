@@ -1,4 +1,4 @@
-using Asp.Versioning;
+﻿using Asp.Versioning;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
@@ -29,7 +29,6 @@ public class EnrollmentsController : ControllerBase
 {
     private readonly TmsDbContext _db;
     private readonly IHubContext<TmsApi.Api.Hubs.TmsHub, ITmsHubClient> _hubContext;
-    private static readonly ConcurrentDictionary<int, string> _statusOverrides = new();
 
     public EnrollmentsController(
         TmsDbContext db,
@@ -41,9 +40,9 @@ public class EnrollmentsController : ControllerBase
 
     public static string GetEnrollmentStatus(Enrollment e)
     {
-        if (_statusOverrides.TryGetValue(e.Id, out var manualStatus))
+        if (!string.IsNullOrWhiteSpace(e.Status))
         {
-            return manualStatus;
+            return e.Status;
         }
         if (e.IsArchived)
         {
@@ -66,6 +65,7 @@ public class EnrollmentsController : ControllerBase
     {
         var rawEnrollments = await _db.Enrollments
             .Include(e => e.Course)
+                .ThenInclude(c => c.Instructor)
             .Include(e => e.Student)
             .OrderByDescending(e => e.Id)
             .ToListAsync(ct);
@@ -86,7 +86,9 @@ public class EnrollmentsController : ControllerBase
                 status = status,
                 enrolledAt = e.EnrolledAt.ToString("O"),
                 grade = e.Grade.HasValue ? (double)Math.Round(e.Grade.Value > 4.0m ? (decimal)e.Grade.Value : (e.Grade.Value / 4.0m) * 100m, 1) : (double?)null,
-                letterGrade = e.Grade.HasValue ? (e.Grade.Value >= 3.6m ? "A" : e.Grade.Value >= 3.0m ? "B" : e.Grade.Value >= 2.0m ? "C" : "D") : null
+                letterGrade = e.Grade.HasValue ? (e.Grade.Value >= 3.6m ? "A" : e.Grade.Value >= 3.0m ? "B" : e.Grade.Value >= 2.0m ? "C" : "D") : null,
+                notes = e.Notes,
+                backupCourses = e.BackupCourses
             };
         });
 
@@ -137,15 +139,16 @@ public class EnrollmentsController : ControllerBase
             StudentId = student.Id,
             CourseId = course.Id,
             EnrolledAt = DateTime.UtcNow,
-            IsArchived = false
+            IsArchived = false,
+            Status = "Pending",
+            Notes = dto.Notes,
+            BackupCourses = dto.BackupCourses != null && dto.BackupCourses.Count > 0 ? string.Join(", ", dto.BackupCourses) : null
         };
 
         _db.Enrollments.Add(enrollment);
         await _db.SaveChangesAsync(ct);
 
-        _statusOverrides[enrollment.Id] = "Pending";
         var enrollmentId = "ENR-" + enrollment.Id;
-
         await _hubContext.Clients.All.ReceiveEnrollmentStatusUpdated(enrollmentId, "Pending");
 
         var response = new
@@ -157,8 +160,8 @@ public class EnrollmentsController : ControllerBase
             courseName = $"{course.Code} - {course.Title}",
             status = "Pending",
             enrolledAt = enrollment.EnrolledAt.ToString("O"),
-            notes = dto.Notes,
-            backupCourses = dto.BackupCourses
+            notes = enrollment.Notes,
+            backupCourses = enrollment.BackupCourses
         };
 
         return Ok(response);
@@ -170,10 +173,10 @@ public class EnrollmentsController : ControllerBase
         var rawId = id.Replace("ENR-", "");
         if (int.TryParse(rawId, out var parsedId))
         {
-            _statusOverrides[parsedId] = "Approved";
             var enrollment = await _db.Enrollments.FindAsync(new object[] { parsedId }, ct);
             if (enrollment != null)
             {
+                enrollment.Status = "Approved";
                 enrollment.IsArchived = false;
                 await _db.SaveChangesAsync(ct);
             }
@@ -189,10 +192,10 @@ public class EnrollmentsController : ControllerBase
         var rawId = id.Replace("ENR-", "");
         if (int.TryParse(rawId, out var parsedId))
         {
-            _statusOverrides[parsedId] = "Rejected";
             var enrollment = await _db.Enrollments.FindAsync(new object[] { parsedId }, ct);
             if (enrollment != null)
             {
+                enrollment.Status = "Rejected";
                 enrollment.IsArchived = true;
                 await _db.SaveChangesAsync(ct);
             }

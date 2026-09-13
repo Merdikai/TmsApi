@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Hybrid;
 using Microsoft.Extensions.Logging;
 using TmsApi.Application.DTOs;
@@ -38,12 +38,23 @@ public class CachedCourseService : ICachedCourseService
 
                 return await _context.Courses
                     .AsNoTracking()
+                    .Include(c => c.Instructor)
                     .Select(c => new CourseDto(
                         c.Id,
                         c.Code,
                         c.Title,
                         c.MaxCapacity,
-                        c.Enrollments.Count))
+                        c.Enrollments.Count,
+                        c.Department,
+                        c.Credits,
+                        c.Summary,
+                        c.Description,
+                        c.Prerequisites,
+                        c.LearningOutcomesJson,
+                        c.SyllabusJson,
+                        c.IndustrySkillsJson,
+                        c.InstructorId,
+                        c.Instructor != null ? $"{c.Instructor.FirstName} {c.Instructor.LastName}" : null))
                     .ToListAsync(token);
             },
             cancellationToken: ct);
