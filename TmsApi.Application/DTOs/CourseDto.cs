@@ -1,4 +1,4 @@
-using System.Text.Json.Serialization;
+﻿using System.Text.Json.Serialization;
 
 namespace TmsApi.Application.DTOs;
 
@@ -7,7 +7,17 @@ public record CourseDto(
     string Code,
     string Title,
     int MaxCapacity,
-    int EnrollmentCount
+    int EnrollmentCount,
+    string? Department = null,
+    decimal Credits = 3.0m,
+    string? Summary = null,
+    string? Description = null,
+    string? Prerequisites = null,
+    string? LearningOutcomesJson = null,
+    string? SyllabusJson = null,
+    string? IndustrySkillsJson = null,
+    string? InstructorId = null,
+    string? InstructorName = null
 )
 {
     // Example of a sensitive field that should never be exposed
@@ -23,6 +33,16 @@ public static class CourseDtoFields
         nameof(CourseDto.Code),
         nameof(CourseDto.Title),
         nameof(CourseDto.MaxCapacity),
-        nameof(CourseDto.EnrollmentCount)
+        nameof(CourseDto.EnrollmentCount),
+        nameof(CourseDto.Department),
+        nameof(CourseDto.Credits),
+        nameof(CourseDto.Summary),
+        nameof(CourseDto.Description),
+        nameof(CourseDto.Prerequisites),
+        nameof(CourseDto.LearningOutcomesJson),
+        nameof(CourseDto.SyllabusJson),
+        nameof(CourseDto.IndustrySkillsJson),
+        nameof(CourseDto.InstructorId),
+        nameof(CourseDto.InstructorName)
     };
 }
