@@ -742,30 +742,29 @@ app.MapGet("/api/error", () =>
 using (var scope = app.Services.CreateScope())
 {
     var context = scope.ServiceProvider.GetRequiredService<TmsDbContext>();
-    context.Database.Migrate(); // applies any pending migrations
-    try
+    if (context.Database.ProviderName != "Microsoft.EntityFrameworkCore.InMemory")
     {
-        context.Database.ExecuteSqlRaw("ALTER TABLE \"Courses\" ADD COLUMN IF NOT EXISTS \"InstructorId\" text;");
-        context.Database.ExecuteSqlRaw("ALTER TABLE \"AspNetUsers\" ADD COLUMN IF NOT EXISTS \"IsApproved\" boolean DEFAULT false;");
-        context.Database.ExecuteSqlRaw("ALTER TABLE \"AspNetUsers\" ADD COLUMN IF NOT EXISTS \"ApprovalStatus\" text DEFAULT 'Pending';");
-        // Ensure legacy pre-existing users are approved
-        context.Database.ExecuteSqlRaw("UPDATE \"AspNetUsers\" SET \"IsApproved\" = true, \"ApprovalStatus\" = 'Approved' WHERE \"Email\" = 'admin@cotbe.edu.et' OR \"UserName\" = 'admin';");
+        try
+        {
+            context.Database.Migrate();
+            context.Database.ExecuteSqlRaw("ALTER TABLE \"Courses\" ADD COLUMN IF NOT EXISTS \"InstructorId\" text;");
+            context.Database.ExecuteSqlRaw("ALTER TABLE \"AspNetUsers\" ADD COLUMN IF NOT EXISTS \"IsApproved\" boolean DEFAULT false;");
+            context.Database.ExecuteSqlRaw("ALTER TABLE \"AspNetUsers\" ADD COLUMN IF NOT EXISTS \"ApprovalStatus\" text DEFAULT 'Pending';");
+            context.Database.ExecuteSqlRaw("UPDATE \"AspNetUsers\" SET \"IsApproved\" = true, \"ApprovalStatus\" = 'Approved' WHERE \"Email\" = 'admin@cotbe.edu.et' OR \"UserName\" = 'admin';");
+            context.Database.ExecuteSqlRaw(@"
+                UPDATE ""Courses"" SET ""InstructorId"" = 'admin' WHERE ""Code"" IN ('CS-101', 'CSE-101', 'CSE-301') AND (""InstructorId"" IS NULL OR ""InstructorId"" = '');
+                UPDATE ""Courses"" SET ""InstructorId"" = 'instructor' WHERE ""Code"" IN ('CS-201', 'CSE-102', 'CSE-201') AND (""InstructorId"" IS NULL OR ""InstructorId"" = '');
+                UPDATE ""Courses"" SET ""InstructorId"" = 'prof.smith' WHERE (""InstructorId"" IS NULL OR ""InstructorId"" = '');
+            ");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Schema update: " + ex.Message);
+        }
     }
-    catch (Exception ex)
+    else
     {
-        Console.WriteLine("Schema update: " + ex.Message);
-
-    try
-    {
-        // Seed Instructor IDs on existing courses if null
-        context.Database.ExecuteSqlRaw(@"
-            UPDATE ""Courses"" SET ""InstructorId"" = 'admin' WHERE ""Code"" IN ('CS-101', 'CSE-101', 'CSE-301') AND (""InstructorId"" IS NULL OR ""InstructorId"" = '');
-            UPDATE ""Courses"" SET ""InstructorId"" = 'instructor' WHERE ""Code"" IN ('CS-201', 'CSE-102', 'CSE-201') AND (""InstructorId"" IS NULL OR ""InstructorId"" = '');
-            UPDATE ""Courses"" SET ""InstructorId"" = 'prof.smith' WHERE (""InstructorId"" IS NULL OR ""InstructorId"" = '');
-        ");
-    }
-    catch { }
-
+        context.Database.EnsureCreated();
     }
 
     if (!context.Students.Any())
@@ -838,3 +837,4 @@ app.MapPost("/fake/certificates", async () =>
 
 app.Run();
 public record GradeSubmitDto(int StudentId, int CourseId, double Score);
+public partial class Program { }
