@@ -1,4 +1,4 @@
-using TmsApi.Domain.Entities;
+﻿using TmsApi.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
@@ -87,7 +87,7 @@ public class CoursesController : ControllerBase
         return Ok(course);
     }
 
-        [HttpPost]
+    [HttpPost]
     public async Task<IActionResult> CreateCourse(
         [FromBody] CreateCourseFullDto dto,
         [FromServices] TmsApi.Infrastructure.Persistence.TmsDbContext db,
@@ -135,8 +135,40 @@ public class CoursesController : ControllerBase
         return CreatedAtAction(nameof(GetCourseById), new { id = course.Id }, course);
     }
 
+    [HttpPut("{id:int}")]
+    public async Task<IActionResult> Update(int id, [FromBody] UpdateCourseFullDto dto, [FromServices] TmsApi.Infrastructure.Persistence.TmsDbContext db, CancellationToken ct = default)
+    {
+        var course = await db.Courses.FirstOrDefaultAsync(c => c.Id == id, ct);
+        if (course == null)
+        {
+            return Problem(
+                statusCode: StatusCodes.Status404NotFound,
+                title: "Course not found",
+                detail: $"Course with ID {id} was not found.",
+                type: "https://tms.local/errors/not-found");
+        }
+
+        if (!string.IsNullOrWhiteSpace(dto.Title)) course.Title = dto.Title.Trim();
+        if (!string.IsNullOrWhiteSpace(dto.Code)) course.Code = dto.Code.Trim().ToUpper();
+        if (dto.MaxCapacity > 0) course.MaxCapacity = dto.MaxCapacity;
+        if (dto.Department != null) course.Department = dto.Department;
+        if (dto.Credits.HasValue && dto.Credits.Value > 0) course.Credits = dto.Credits.Value;
+        if (dto.Summary != null) course.Summary = dto.Summary;
+        if (dto.Description != null) course.Description = dto.Description;
+        if (dto.Prerequisites != null) course.Prerequisites = dto.Prerequisites;
+        if (dto.LearningOutcomesJson != null) course.LearningOutcomesJson = dto.LearningOutcomesJson;
+        if (dto.SyllabusJson != null) course.SyllabusJson = dto.SyllabusJson;
+        if (dto.IndustrySkillsJson != null) course.IndustrySkillsJson = dto.IndustrySkillsJson;
+        if (dto.InstructorId != null) course.InstructorId = dto.InstructorId;
+
+        await db.SaveChangesAsync(ct);
+        await _cachedCourseService.InvalidateCourseCacheAsync();
+
+        return NoContent();
+    }
+
     [HttpDelete("{id}")]
-    public async Task<IActionResult> Delete(int id, [FromServices] TmsApi.Infrastructure.Persistence.TmsDbContext db, CancellationToken ct)
+    public async Task<IActionResult> Delete(int id, [FromServices] TmsApi.Infrastructure.Persistence.TmsDbContext db, CancellationToken ct = default)
     {
         var course = await db.Courses.Include(c => c.Enrollments).FirstOrDefaultAsync(c => c.Id == id, ct);
         if (course == null)
@@ -159,7 +191,8 @@ public class CoursesController : ControllerBase
 
         db.Courses.Remove(course);
         await db.SaveChangesAsync(ct);
+        await _cachedCourseService.InvalidateCourseCacheAsync();
+
         return NoContent();
     }
-
 }
