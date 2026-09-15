@@ -1,3 +1,4 @@
+using TmsApi.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
@@ -84,6 +85,54 @@ public class CoursesController : ControllerBase
             return NotFound();
 
         return Ok(course);
+    }
+
+        [HttpPost]
+    public async Task<IActionResult> CreateCourse(
+        [FromBody] CreateCourseFullDto dto,
+        [FromServices] TmsApi.Infrastructure.Persistence.TmsDbContext db,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(dto.Code) || string.IsNullOrWhiteSpace(dto.Title))
+        {
+            return Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Validation Error",
+                detail: "Course code and title are required.",
+                type: "https://tms.local/errors/validation-error");
+        }
+
+        var exists = await db.Courses.AnyAsync(c => c.Code.ToUpper() == dto.Code.ToUpper(), ct);
+        if (exists)
+        {
+            return Problem(
+                statusCode: StatusCodes.Status409Conflict,
+                title: "Duplicate Course",
+                detail: $"A course with code {dto.Code} already exists.",
+                type: "https://tms.local/errors/duplicate-course");
+        }
+
+        var course = new Course
+        {
+            Code = dto.Code.Trim().ToUpper(),
+            Title = dto.Title.Trim(),
+            MaxCapacity = dto.MaxCapacity > 0 ? dto.MaxCapacity : 30,
+            Department = dto.Department,
+            Credits = dto.Credits > 0 ? dto.Credits : 3.0m,
+            Summary = dto.Summary,
+            Description = dto.Description,
+            Prerequisites = dto.Prerequisites,
+            LearningOutcomesJson = dto.LearningOutcomesJson,
+            SyllabusJson = dto.SyllabusJson,
+            IndustrySkillsJson = dto.IndustrySkillsJson,
+            InstructorId = dto.InstructorId
+        };
+
+        db.Courses.Add(course);
+        await db.SaveChangesAsync(ct);
+        await _cachedCourseService.InvalidateCourseCacheAsync();
+
+        return CreatedAtAction(nameof(GetCourseById), new { id = course.Id }, course);
     }
 
     [HttpDelete("{id}")]
